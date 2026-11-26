@@ -44,34 +44,31 @@ class Combo(Widget):
         return self.index
 
 
-class Tree(Widget):
+class RecordList(Widget):
     def __init__(self):
         super().__init__()
-        self.rows = {}
+        self.records = {}
         self.selected = ()
+        self.busy = self.ordered = False
 
-    def get_children(self):
-        return tuple(self.rows)
-
-    def delete(self, *items):
-        for item in items:
-            self.rows.pop(item, None)
-        self.selected = tuple(item for item in self.selected if item in self.rows)
-
-    def insert(self, parent, location, iid, values):
-        self.rows[iid] = values
+    def set_records(self, records, selected_id=None):
+        self.records = {record['captureId']: record for record in records}
+        previous = (self.selected or (None,))[0]
+        selected = (selected_id if selected_id in self.records else previous
+                    if previous in self.records else next(iter(self.records), None))
+        self.selected = (selected,) if selected is not None else ()
 
     def selection(self):
         return self.selected
 
-    def selection_set(self, selected):
-        self.selected = (selected,)
+    def select(self, selected):
+        self.selected = (selected,) if selected in self.records else ()
 
-    def focus(self, selected):
-        pass
+    def set_busy(self, value):
+        self.busy = value
 
-    def see(self, selected):
-        pass
+    def set_ordered(self, value):
+        self.ordered = value
 
 
 class AppRecordTests(unittest.TestCase):
@@ -105,13 +102,13 @@ class AppRecordTests(unittest.TestCase):
         picker.current_target = None
         picker.pages = [{'id': 'orders', 'url': self.page}, {'id': 'customers', 'url': self.other}]
         picker.page_combo = Combo()
-        picker.record_tree = Tree()
+        picker.record_list = RecordList()
         picker.records = {record['captureId']: record for record in self.workspace.list_captures()}
         picker._page_records = []
         picker.sequence_ordered = Value(False)
-        picker.selection_status = Value('')
         picker.status = Value('')
         picker.saved_status = Value('')
+        picker.records_heading = Value('')
         picker.editor_window = None
         picker.exporting = picker.sending = picker.closing = picker.connecting = False
         picker.capture_enabled = False
@@ -121,8 +118,7 @@ class AppRecordTests(unittest.TestCase):
         picker._queue_fit = lambda *args: None
         picker.logs = []
         picker._log = picker.logs.append
-        for name in ('edit_record_button', 'delete_record_button', 'move_up_button',
-                     'move_down_button', 'sequence_check', 'connect_button',
+        for name in ('sequence_check', 'connect_button',
                      'disconnect_button', 'send_button', 'export_button'):
             setattr(picker, name, Widget())
         picker._update_saved_status()
@@ -130,16 +126,16 @@ class AppRecordTests(unittest.TestCase):
 
     def test_selected_page_lists_only_its_controls_and_resets_foreign_selection(self):
         picker = self.picker
-        self.assertEqual(set(picker.record_tree.rows), {'cap-first', 'cap-second'})
-        picker.record_tree.selection_set('cap-second')
+        self.assertEqual(set(picker.record_list.records), {'cap-first', 'cap-second'})
+        picker.record_list.select('cap-second')
         picker.page_combo.index = 1
         picker._update_saved_status()
-        self.assertEqual(list(picker.record_tree.rows), ['cap-other'])
+        self.assertEqual(list(picker.record_list.records), ['cap-other'])
         self.assertEqual(picker._selected_record()['captureId'], 'cap-other')
         self.assertIn('1 项', picker.saved_status.get())
         picker.page_combo.index = -1
         picker._update_saved_status()
-        self.assertEqual(picker.record_tree.rows, {})
+        self.assertEqual(picker.record_list.records, {})
         self.assertIsNone(picker._selected_record())
 
     def test_annotation_edit_preserves_page_and_all_locator_evidence(self):
@@ -152,23 +148,35 @@ class AppRecordTests(unittest.TestCase):
             self.assertEqual(self.workspace.load_capture('cap-first')['annotation'][field], updated['annotation'][field])
         self.assertEqual(updated['control'], before['control'])
         self.assertEqual(updated['page'], before['page'])
-        self.assertEqual(self.picker.record_tree.rows['cap-first'][1], '订单编号')
+        self.assertEqual(self.picker.record_list.records['cap-first']['annotation']['name'], '订单编号')
         self.assertEqual(self.picker._selected_record()['captureId'], 'cap-first')
         self.assertEqual(self.workspace.load_capture('cap-other')['annotation']['name'], '客户')
+
+    def test_saved_capture_is_selected_only_when_it_belongs_to_the_current_page(self):
+        picker = self.picker
+        added = self.workspace.save_capture(self.card('cap-new', self.page, '新控件'))
+        picker.records[added['captureId']] = added
+        picker._update_saved_status(added['captureId'])
+        self.assertEqual(picker.record_list.selection(), ('cap-new',))
+        foreign = self.workspace.save_capture(self.card('cap-new-other', self.other, '另页控件'))
+        picker.records[foreign['captureId']] = foreign
+        picker._update_saved_status(foreign['captureId'])
+        self.assertEqual(picker.record_list.selection(), ('cap-new',))
+        self.assertNotIn('cap-new-other', picker.record_list.records)
 
     def test_delete_requires_confirmation_refreshes_list_and_preserves_exported_snapshot(self):
         picker = self.picker
         bundle = self.workspace.export_page_bundle(self.page)
         path = Path(bundle['bundlePath'])
         before = path.read_bytes()
-        picker.record_tree.selection_set('cap-first')
+        picker.record_list.select('cap-first')
         with patch.object(app.messagebox, 'askyesno', return_value=False) as confirm:
             picker.delete_selected_record()
         confirm.assert_called_once()
-        self.assertIn('cap-first', picker.record_tree.rows)
+        self.assertIn('cap-first', picker.record_list.records)
         with patch.object(app.messagebox, 'askyesno', return_value=True):
             picker.delete_selected_record()
-        self.assertNotIn('cap-first', picker.record_tree.rows)
+        self.assertNotIn('cap-first', picker.record_list.records)
         self.assertNotIn('cap-first', picker.records)
         self.assertEqual([record['captureId'] for record in self.workspace.list_page_captures(self.page)], ['cap-second'])
         self.assertEqual(path.read_bytes(), before)
@@ -177,9 +185,9 @@ class AppRecordTests(unittest.TestCase):
 
     def test_move_and_order_declaration_survive_controller_reload_and_export(self):
         picker = self.picker
-        picker.record_tree.selection_set('cap-second')
+        picker.record_list.select('cap-second')
         picker.move_selected_record(-1)
-        self.assertEqual(list(picker.record_tree.rows), ['cap-second', 'cap-first'])
+        self.assertEqual(list(picker.record_list.records), ['cap-second', 'cap-first'])
         self.assertTrue(picker.sequence_ordered.get())
         reopened = Workspace(self.workspace.root)
         self.assertEqual([record['captureId'] for record in reopened.list_page_captures(self.page)], ['cap-second', 'cap-first'])
@@ -214,8 +222,8 @@ class AppRecordTests(unittest.TestCase):
                 before = copy.deepcopy(self.workspace.load_capture('cap-first'))
                 order = [record['captureId'] for record in self.workspace.list_page_captures(self.page)]
                 picker._record_selection_changed()
-                for name in ('edit_record_button', 'delete_record_button', 'move_up_button', 'move_down_button', 'sequence_check'):
-                    self.assertEqual(getattr(picker, name).options['state'], 'disabled')
+                self.assertTrue(picker.record_list.busy)
+                self.assertEqual(picker.sequence_check.options['state'], 'disabled')
                 with patch.object(app.tk, 'Toplevel', side_effect=AssertionError('No editor while busy')), \
                      patch.object(app.messagebox, 'askyesno', side_effect=AssertionError('No deletion while busy')):
                     picker.edit_selected_record()
@@ -308,10 +316,10 @@ class HiddenTkRecordTests(unittest.TestCase):
         self.root.update_idletasks()
         return self.picker.editor_window
 
-    def test_native_tree_editor_save_delete_and_unsaved_editor_barrier(self):
+    def test_native_cards_editor_save_delete_and_unsaved_editor_barrier(self):
         picker = self.picker
-        self.assertEqual(picker.record_tree.get_children(), ('cap-first', 'cap-second'))
-        picker.record_tree.selection_set('cap-first')
+        self.assertEqual(tuple(picker.record_list.cards), ('cap-first', 'cap-second'))
+        picker.record_list.select('cap-first')
         before = self.workspace.load_capture('cap-first')
         bundle = self.workspace.export_page_bundle(self.page)
         snapshot = Path(bundle['bundlePath']).read_bytes()
@@ -341,10 +349,10 @@ class HiddenTkRecordTests(unittest.TestCase):
         self.assertEqual(after['annotation']['preconditions'], '必须登录')
         self.assertEqual(after['control'], before['control'])
         self.assertEqual(after['page'], before['page'])
-        self.assertEqual(picker.record_tree.item('cap-first', 'values')[1], '订单编号')
+        self.assertIn('订单编号', picker.record_list.cards['cap-first']['title'].cget('text'))
         with patch.object(app.messagebox, 'askyesno', return_value=True):
             picker.delete_selected_record()
-        self.assertEqual(picker.record_tree.get_children(), ('cap-second',))
+        self.assertEqual(tuple(picker.record_list.cards), ('cap-second',))
         self.assertEqual(Path(bundle['bundlePath']).read_bytes(), snapshot)
 
     def test_native_order_buttons_freeze_and_expand_collapse_layout(self):
@@ -358,10 +366,10 @@ class HiddenTkRecordTests(unittest.TestCase):
         collapsed = (body.winfo_reqwidth(), body.winfo_reqheight())
         self.assertLess(collapsed[1], expanded[1])
         picker.toggle_records()
-        picker.record_tree.selection_set('cap-second')
+        picker.record_list.select('cap-second')
         picker._record_selection_changed()
-        picker.move_up_button.invoke()
-        self.assertEqual(picker.record_tree.get_children(), ('cap-second', 'cap-first'))
+        picker.record_list.cards['cap-second']['buttons']['up'].invoke()
+        self.assertEqual(tuple(picker.record_list.cards), ('cap-second', 'cap-first'))
         self.assertTrue(picker.sequence_ordered.get())
         for state in ('sending', 'exporting', 'pending_count'):
             if state == 'pending_count':
@@ -370,8 +378,8 @@ class HiddenTkRecordTests(unittest.TestCase):
             else:
                 setattr(picker, state, True)
             picker._controls()
-            for widget in (picker.edit_record_button, picker.delete_record_button,
-                           picker.move_up_button, picker.move_down_button, picker.sequence_check):
+            for widget in (list(picker.record_list.cards['cap-first']['buttons'].values())
+                           + [picker.sequence_check]):
                 self.assertTrue(widget.instate(('disabled',)))
             if state == 'pending_count':
                 picker._pending_save_count = previous_pending
@@ -408,6 +416,79 @@ class HiddenTkRecordTests(unittest.TestCase):
             self.assertNotIn(key, registry)
         pending = set(self.root.tk.splitlist(self.root.tk.call('after', 'info')))
         self.assertFalse(owned & pending)
+
+
+class HiddenTkPaletteDpiTests(unittest.TestCase):
+    def test_main_palette_tools_and_height_at_five_dpi_scales(self):
+        evidence = []
+        for ratio in (1, 1.25, 1.5, 1.75, 2):
+            with self.subTest(dpi=round(ratio * 100)), tempfile.TemporaryDirectory(prefix='picker-palette-dpi-') as temporary:
+                root = app.tk.Tk()
+                root.withdraw()
+                original_scaling = float(root.tk.call('tk', 'scaling'))
+                root.tk.call('tk', 'scaling', 96 / 72 * ratio)
+                picker = None
+                try:
+                    picker = app.PickerApp(root, workspace_path=Path(temporary))
+                    workspace = picker._workspace()
+                    page = 'https://example.test/orders'
+                    for capture_id in ('cap-long', 'cap-next'):
+                        card = AppRecordTests.card(capture_id, page, '核对当前订单与客户状态的业务查询按钮名称' * 4)
+                        card['annotation']['description'] = '先填入业务编号，再核对本项控件对应的页面位置、用途以及预期结果。' * 30
+                        workspace.save_capture(card)
+                    picker.pages = [{'id': 'fixture', 'url': page}]
+                    picker.page_combo.configure(values=('虚构订单页',))
+                    picker.page_combo.current(0)
+                    body = picker._layout_specs[str(root)][1]
+                    # Give the withdrawn host real allocation; never map it.
+                    body.pack_forget()
+                    body.place(x=0, y=0, width=picker.palette_width, height=root.winfo_screenheight())
+                    picker.reload_records()
+                    root.update_idletasks()
+                    picker._apply_fit(str(root))
+                    root.update_idletasks()
+                    self.assertEqual(root.state(), 'withdrawn')
+                    self.assertEqual(tuple(picker.record_list.cards), ('cap-long', 'cap-next'))
+                    toolbar = body.grid_slaves(row=2, column=0)[0]
+                    buttons = [picker.launch_button, picker.refresh_button,
+                               picker.connect_button, picker.disconnect_button]
+                    boxes = []
+                    for button in buttons:
+                        x = button.winfo_rootx() - toolbar.winfo_rootx()
+                        y = button.winfo_rooty() - toolbar.winfo_rooty()
+                        box = (x, y, x + button.winfo_width(), y + button.winfo_height())
+                        self.assertGreater(button.winfo_width(), 1)
+                        self.assertGreaterEqual(box[0], 0)
+                        self.assertLessEqual(box[2], toolbar.winfo_width())
+                        boxes.append(box)
+                    for index, left in enumerate(boxes):
+                        for right in boxes[index + 1:]:
+                            overlap = (min(left[2], right[2]) > max(left[0], right[0])
+                                       and min(left[3], right[3]) > max(left[1], right[1]))
+                            self.assertFalse(overlap, boxes)
+                    self.assertLessEqual(toolbar.winfo_rootx() - body.winfo_rootx() + toolbar.winfo_width(), body.winfo_width())
+                    expanded_height = body.winfo_reqheight()
+                    safe_height = root.winfo_screenheight() - picker._dip(90)
+                    self.assertLessEqual(expanded_height, safe_height)
+                    self.assertLessEqual(root.minsize()[1], safe_height)
+                    picker.toggle_records()
+                    root.update_idletasks()
+                    picker._apply_fit(str(root))
+                    collapsed_height = body.winfo_reqheight()
+                    self.assertLess(collapsed_height, expanded_height)
+                    evidence.append({'dpi': round(ratio * 100), 'width': picker.palette_width,
+                                     'expanded': expanded_height, 'collapsed': collapsed_height,
+                                     'screenLimit': safe_height, 'viewport': picker.record_list.viewport_height()})
+                finally:
+                    if picker is not None:
+                        picker.closed = True
+                        for specification in list(picker._layout_specs.values()):
+                            picker._forget_window_layout(specification[0])
+                    for callback in root.tk.splitlist(root.tk.call('after', 'info')):
+                        root.tk.call('after', 'cancel', callback)
+                    root.tk.call('tk', 'scaling', original_scaling)
+                    root.destroy()
+        print('HIDDEN_PALETTE_DPI ' + json.dumps(evidence))
 
 
 if __name__ == '__main__':

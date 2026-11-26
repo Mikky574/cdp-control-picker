@@ -13,6 +13,7 @@ import shutil
 import sys
 import threading
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import filedialog, messagebox, ttk
 from urllib.parse import urlsplit
 import uuid
@@ -20,12 +21,13 @@ import uuid
 from cdp_client import CDPClient
 from workspace import Workspace, atomic_write, page_identity, safe_url, sanitize_text
 from browser_launcher import launch_or_reuse
+from capture_list import CaptureList
 
 
 RESOURCE_DIR = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
 SCRIPT = RESOURCE_DIR / 'page_picker.js'
 ICON = RESOURCE_DIR / 'assets' / 'app-icon.ico'
-VERSION = '0.2.1'
+VERSION = '0.2.2'
 BINDING = '__cdpControlPickerSave'
 SAVE_WAIT_MESSAGE = '正在保存标注，完成后再发送。'
 
@@ -95,8 +97,8 @@ class PickerApp:
         self.status=tk.StringVar(value='在专用 Chrome 登录网站，再刷新并选页。')
         self.capture_status=tk.StringVar(value='采集未开启')
         self.saved_status=tk.StringVar(value='选页后显示本页已保存标注')
+        self.records_heading=tk.StringVar(value='本页控件')
         self.sequence_ordered=tk.BooleanVar(value=False)
-        self.selection_status=tk.StringVar(value='选中控件可查看详情，双击可编辑。')
         self._build()
         for variable in (self.status,self.saved_status):
             variable.trace_add('write',lambda *_:self._queue_fit())
@@ -116,63 +118,55 @@ class PickerApp:
                 image_path=ICON.with_suffix('.png')
                 if image_path.is_file():
                     self.icon_image=tk.PhotoImage(file=str(image_path));r.iconphoto(True,self.icon_image);self.icon_applied=True
-        r.geometry('380x210');r.minsize(380,210);r.resizable(False,False);r.attributes('-topmost',True)
+        self.ui_font=tkfont.Font(root=r,family='Microsoft YaHei UI',size=9)
+        self.heading_font=tkfont.Font(root=r,family='Microsoft YaHei UI',size=10,weight='bold')
+        self._ui_scale=max(0.8,self.ui_font.metrics('linespace')/17)
+        self.palette_width=self._dip(360)
+        r.geometry(f'{self.palette_width}x{self._dip(210)}');r.minsize(self.palette_width,self._dip(210));r.resizable(False,False);r.attributes('-topmost',True)
         r.configure(background='#f5f7fa')
         style=ttk.Style(r);style.theme_use('clam')
-        style.configure('.',font=('Microsoft YaHei UI',9),background='#f5f7fa',foreground='#142139')
-        style.configure('TButton',padding=(8,4),background='#ffffff',bordercolor='#ccd8e8')
+        style.configure('.',font=self.ui_font,background='#f5f7fa',foreground='#142139')
+        style.configure('TButton',padding=(self._dip(8),self._dip(4)),background='#ffffff',bordercolor='#dce3ec')
         style.map('TButton',background=[('active','#eaf1fc')])
-        style.configure('Small.TButton',padding=(6,2))
+        style.configure('Small.TButton',padding=(self._dip(6),self._dip(3)))
+        style.configure('Quiet.TButton',padding=(self._dip(5),self._dip(3)),relief='flat',borderwidth=0,background='#f5f7fa',foreground='#526780')
+        style.map('Quiet.TButton',background=[('active','#e9eef5')])
         style.configure('Primary.TButton',background='#175bd7',foreground='#ffffff',bordercolor='#175bd7')
         style.map('Primary.TButton',background=[('active','#104cb8'),('disabled','#a8bddf')],foreground=[('disabled','#ffffff')])
         style.configure('TEntry',padding=5,fieldbackground='#ffffff')
         style.configure('TCombobox',padding=3,fieldbackground='#ffffff')
-        body=ttk.Frame(r,padding=(10,7));body.pack(fill='both',expand=True);body.columnconfigure(0,weight=1)
+        body=ttk.Frame(r,padding=(self._dip(10),self._dip(8)));body.pack(fill='both',expand=True);body.columnconfigure(0,weight=1)
         header=ttk.Frame(body);header.grid(row=0,column=0,sticky='ew')
-        heading=ttk.Label(header,text='⋮⋮  网页控件采集',font=('Microsoft YaHei UI',10,'bold'),cursor='fleur');heading.pack(side='left')
+        heading=ttk.Label(header,text='⋮⋮  网页控件采集',font=self.heading_font,cursor='fleur');heading.pack(side='left')
         for widget in (header,heading):
             widget.bind('<ButtonPress-1>',self._drag_start);widget.bind('<B1-Motion>',self._drag_move)
-        self.settings_button=ttk.Button(header,text='设置',width=5,style='Small.TButton',command=self.open_settings);self.settings_button.pack(side='right')
-        tools=ttk.Frame(body);tools.grid(row=1,column=0,sticky='ew',pady=(5,0))
-        self.launch_button=ttk.Button(tools,text='启动 Chrome',style='Small.TButton',command=self.launch_browser);self.launch_button.pack(side='left')
-        self.refresh_button=ttk.Button(tools,text='刷新',width=5,style='Small.TButton',command=self.refresh_pages);self.refresh_button.pack(side='left',padx=(5,0))
-        ttk.Button(tools,text='日志',width=5,style='Small.TButton',command=self.open_log).pack(side='right')
-        ttk.Button(tools,text='记录',width=5,style='Small.TButton',command=self.open_record_folder).pack(side='right',padx=(0,5))
-        self.page_combo=ttk.Combobox(body,state='readonly',textvariable=self.page_choice,width=1);self.page_combo.grid(row=2,column=0,sticky='ew',pady=(6,0))
+        self.settings_button=ttk.Button(header,text='设置',width=4,style='Quiet.TButton',command=self.open_settings);self.settings_button.pack(side='right')
+        self.page_combo=ttk.Combobox(body,state='readonly',textvariable=self.page_choice,width=1);self.page_combo.grid(row=1,column=0,sticky='ew',pady=(self._dip(8),0))
         self.page_combo.bind('<<ComboboxSelected>>',lambda _event:self._update_saved_status())
-        actions=ttk.Frame(body);actions.grid(row=3,column=0,sticky='ew',pady=(6,0));actions.columnconfigure(0,weight=1)
-        self.connect_button=ttk.Button(actions,text='连接并开启采集',style='Primary.TButton',command=self.connect_and_capture);self.connect_button.grid(row=0,column=0,sticky='ew')
+        tools=ttk.Frame(body);tools.grid(row=2,column=0,sticky='ew',pady=(self._dip(6),0))
+        self.launch_button=ttk.Button(tools,text='Chrome',width=0,style='Small.TButton',command=self.launch_browser);self.launch_button.pack(side='left')
+        self.refresh_button=ttk.Button(tools,text='刷新',width=4,style='Quiet.TButton',command=self.refresh_pages);self.refresh_button.pack(side='left',padx=(self._dip(4),0))
+        self.disconnect_button=ttk.Button(tools,text='断开',width=4,style='Quiet.TButton',command=self.disconnect,state='disabled');self.disconnect_button.pack(side='right')
+        self.connect_button=ttk.Button(tools,text='开启采集',width=0,style='Primary.TButton',command=self.connect_and_capture);self.connect_button.pack(side='right',padx=(self._dip(4),self._dip(4)))
         self.capture_button=self.connect_button
-        self.disconnect_button=ttk.Button(actions,text='关闭',width=6,command=self.disconnect,state='disabled');self.disconnect_button.grid(row=0,column=1,padx=(6,0))
-        self.status_label=tk.Label(body,textvariable=self.status,bg='#f5f7fa',fg='#526780',font=('Microsoft YaHei UI',9),wraplength=354,justify='left',anchor='w');self.status_label.grid(row=4,column=0,sticky='ew',pady=(6,0))
-        self.saved_label=ttk.Label(body,textvariable=self.saved_status,foreground='#087b6b',font=('Microsoft YaHei UI',8),wraplength=354,justify='left',anchor='w');self.saved_label.grid(row=5,column=0,sticky='ew',pady=(4,0))
-        records_header=ttk.Frame(body);records_header.grid(row=6,column=0,sticky='ew',pady=(6,0))
-        ttk.Label(records_header,text='本页控件',font=('Microsoft YaHei UI',9,'bold')).pack(side='left')
-        self.records_toggle=ttk.Button(records_header,text='收起',width=5,style='Small.TButton',command=self.toggle_records);self.records_toggle.pack(side='right')
-        self.records_panel=ttk.Frame(body);self.records_panel.grid(row=7,column=0,sticky='ew',pady=(4,0));self.records_panel.columnconfigure(0,weight=1)
-        table=ttk.Frame(self.records_panel);table.grid(row=0,column=0,sticky='ew');table.columnconfigure(0,weight=1)
-        self.record_tree=ttk.Treeview(table,columns=('number','name','description'),show='headings',height=4,selectmode='browse')
-        for key,title,width in (('number','序号',38),('name','名称',105),('description','用途',178)):
-            self.record_tree.heading(key,text=title);self.record_tree.column(key,width=width,minwidth=width,stretch=key=='description')
-        self.record_tree.grid(row=0,column=0,sticky='ew')
-        scroll=ttk.Scrollbar(table,orient='vertical',command=self.record_tree.yview);scroll.grid(row=0,column=1,sticky='ns');self.record_tree.configure(yscrollcommand=scroll.set)
-        self.record_tree.bind('<<TreeviewSelect>>',lambda _event:self._record_selection_changed())
-        self.record_tree.bind('<Double-1>',lambda _event:self.edit_selected_record())
-        self.record_detail=ttk.Label(self.records_panel,textvariable=self.selection_status,foreground='#526780',wraplength=354,justify='left',anchor='w');self.record_detail.grid(row=1,column=0,sticky='ew',pady=(4,0))
-        record_tools=ttk.Frame(self.records_panel);record_tools.grid(row=2,column=0,sticky='ew',pady=(4,0))
-        self.edit_record_button=ttk.Button(record_tools,text='编辑',style='Small.TButton',command=self.edit_selected_record);self.edit_record_button.pack(side='left')
-        self.delete_record_button=ttk.Button(record_tools,text='删除',style='Small.TButton',command=self.delete_selected_record);self.delete_record_button.pack(side='left',padx=(4,0))
-        self.move_up_button=ttk.Button(record_tools,text='上移',style='Small.TButton',command=lambda:self.move_selected_record(-1));self.move_up_button.pack(side='left',padx=(4,0))
-        self.move_down_button=ttk.Button(record_tools,text='下移',style='Small.TButton',command=lambda:self.move_selected_record(1));self.move_down_button.pack(side='left',padx=(4,0))
-        self.sequence_check=ttk.Checkbutton(self.records_panel,text='按此顺序操作',variable=self.sequence_ordered,command=self.save_sequence_declaration);self.sequence_check.grid(row=3,column=0,sticky='w',pady=(4,0))
-        ttk.Label(self.records_panel,text='勾选后作为操作步骤发送；前置条件可在编辑中补充。',foreground='#526780',font=('Microsoft YaHei UI',8)).grid(row=4,column=0,sticky='w')
-        footer=ttk.Frame(body);footer.grid(row=8,column=0,sticky='ew',pady=(7,0));footer.columnconfigure(0,weight=1)
+        self.status_label=tk.Label(body,textvariable=self.status,bg='#f5f7fa',fg='#6b7a90',font=self.ui_font,wraplength=self.palette_width-self._dip(24),justify='left',anchor='w');self.status_label.grid(row=3,column=0,sticky='ew',pady=(self._dip(6),0))
+        records_header=ttk.Frame(body);records_header.grid(row=4,column=0,sticky='ew',pady=(self._dip(9),self._dip(5)))
+        ttk.Label(records_header,textvariable=self.records_heading,font=(self.ui_font.actual('family'),9,'bold')).pack(side='left')
+        self.records_toggle=ttk.Button(records_header,text='收起',width=4,style='Quiet.TButton',command=self.toggle_records);self.records_toggle.pack(side='right')
+        self.records_panel=ttk.Frame(body);self.records_panel.grid(row=5,column=0,sticky='ew');self.records_panel.columnconfigure(0,weight=1)
+        self.record_list=CaptureList(self.records_panel,on_select=self._select_record,on_edit=self._edit_record,on_delete=self._delete_record,on_move=self._move_record,sanitizer=self._safe_text)
+        self.record_list.grid(row=0,column=0,sticky='ew')
+        self.sequence_check=ttk.Checkbutton(self.records_panel,text='按此顺序操作',variable=self.sequence_ordered,command=self.save_sequence_declaration);self.sequence_check.grid(row=1,column=0,sticky='w',pady=(self._dip(7),0))
+        footer=ttk.Frame(body);footer.grid(row=6,column=0,sticky='ew',pady=(self._dip(10),0));footer.columnconfigure(0,weight=1)
         self.send_button=ttk.Button(footer,text='发给 ZCode',style='Primary.TButton',command=self.send_page_to_zcode);self.send_button.grid(row=0,column=0,sticky='ew')
-        self.export_button=ttk.Button(footer,text='复制交接说明',style='Small.TButton',command=self.export_page_task);self.export_button.grid(row=0,column=1,padx=(6,0),sticky='e')
+        self.export_button=ttk.Button(footer,text='复制说明',style='Quiet.TButton',command=self.export_page_task);self.export_button.grid(row=0,column=1,padx=(self._dip(7),0),sticky='e')
         # Kept off-layout for backend compatibility; the actual field opens in Settings.
         self.endpoint_entry=ttk.Entry(r,textvariable=self.endpoint)
-        self._fit_window(r,body,380,210,wraps=(self.status_label,self.saved_label,self.record_detail))
+        self._fit_window(r,body,self.palette_width,self._dip(210),wraps=(self.status_label,))
         self._record_selection_changed()
+
+    def _dip(self,value):
+        return max(1,round(value*self._ui_scale))
 
     def _fit_window(self,window,body,min_width,min_height,wraps=()):
         # Fonts and native DPI metrics may settle after the first geometry pass.
@@ -217,11 +211,18 @@ class PickerApp:
             if not window.winfo_exists():
                 self._layout_specs.pop(key,None);return
             window.update_idletasks()
-            width=max(min_width,body.winfo_reqwidth())
-            padding=32 if window is not self.root else 20
+            width=min_width if window is self.root else max(min_width,body.winfo_reqwidth())
+            padding=32 if window is not self.root else self._dip(20)
             for label in wraps:label.configure(wraplength=max(180,width-padding))
             window.update_idletasks()
-            width=max(min_width,body.winfo_reqwidth())
+            width=min_width if window is self.root else max(min_width,body.winfo_reqwidth())
+            if window is self.root and hasattr(self,'record_list') and self._records_expanded:
+                limit=max(min_height,window.winfo_screenheight()-self._dip(90))
+                current=self.record_list.viewport_height()
+                chrome=max(0,body.winfo_reqheight()-current)
+                available=max(self.ui_font.metrics('linespace')*3,limit-chrome)
+                self.record_list.set_viewport_height(min(self.record_list.preferred_viewport_height,available))
+                window.update_idletasks()
             height=max(min_height,body.winfo_reqheight())
             window.minsize(width,height)
             current=re.match(r'^(\d+)x(\d+)',window.geometry())
@@ -259,7 +260,7 @@ class PickerApp:
         connected=bool(self.client and self.client.connected)
         saving=bool(self._pending_save_count())
         editing=bool(getattr(self,'editor_window',None))
-        self.connect_button.configure(state='disabled' if self.connecting or self.closing or self.capture_enabled or saving else 'normal',text='采集中 · 请在网页右键' if self.capture_enabled else '开启右键采集' if connected else '连接并开启采集')
+        self.connect_button.configure(state='disabled' if self.connecting or self.closing or self.capture_enabled or saving else 'normal',text='采集中' if self.capture_enabled else '开启采集')
         self.disconnect_button.configure(state='normal' if connected and not self.connecting and not self.closing and not saving else 'disabled')
         self.page_combo.configure(state='disabled' if connected or self.connecting or editing else 'readonly')
         self.send_button.configure(state='disabled' if self.sending or self.exporting or self.closing or saving or editing else 'normal',text='正在交接…' if self.sending else '正在保存标注…' if saving else '发给 ZCode')
@@ -271,7 +272,7 @@ class PickerApp:
                 try:
                     if widget.winfo_exists():widget.configure(state='disabled' if disabled else 'normal')
                 except tk.TclError:pass
-        if hasattr(self,'record_tree'):self._record_selection_changed()
+        if hasattr(self,'record_list'):self._record_selection_changed()
         self._queue_fit()
 
     def _drain(self):
@@ -284,14 +285,14 @@ class PickerApp:
             elif kind=='pages':
                 previous=self._refresh_selected_id
                 self.pages=value
-                labels=[f'{i+1}. {self._safe_text(p.get("title") or "未命名",70)} | {safe_url(p.get("url",""))}' for i,p in enumerate(value)]
+                labels=[f'{i+1}. {self._safe_text(p.get("title") or "未命名网页",32)} · {urlsplit(safe_url(p.get("url",""))).hostname or "本地页面"}' for i,p in enumerate(value)]
                 self.page_combo.configure(values=labels)
                 retained=next((i for i,p in enumerate(value) if previous and p.get('id')==previous),None)
                 if retained is not None:self.page_combo.current(retained)
                 elif len(value)==1:self.page_combo.current(0)
                 else:self.page_choice.set('请选择目标网页' if value else '请先在 Chrome 中打开网站')
                 self._update_saved_status()
-                self.status.set(f'发现 {len(value)} 个网页；'+('已保留所选页。' if retained is not None else '已选中唯一网页，点击连接开始。' if len(value)==1 else '请选择目标页后连接。' if value else '登录网站后再刷新。'))
+                self.status.set('已保留所选网页。' if retained is not None else '点击“开启采集”，然后在网页右键标注。' if len(value)==1 else f'找到 {len(value)} 个网页，请选页后开启采集。' if value else '请在 Chrome 打开网站后刷新。')
                 self._log(f'刷新发现 {len(value)} 个普通网页；没有自动连接。')
             elif kind=='connected':
                 self.current_target=value;self.current_identity=identity(value.get('url',''));self.capture_enabled=False
@@ -311,7 +312,7 @@ class PickerApp:
             elif kind=='saved':
                 self.records[value['captureId']]=value
                 name=self._safe_text(value.get('annotation',{}).get('name') or value['captureId'],26)
-                self._update_saved_status();self.status.set('已保存：'+name+'。可继续右键采集。');self._log('已保存控件：'+name)
+                self._update_saved_status(value['captureId']);self.status.set('已保存 · '+name);self._log('已保存控件：'+name)
             elif kind=='save-finished':pass
             elif kind=='page-current-url':
                 generation,url=value
@@ -380,14 +381,14 @@ class PickerApp:
             self.records={r['captureId']:r for r in records};self._update_saved_status()
         except Exception as error:self._log('读取记录失败：'+str(error));self.status.set(self._safe_text(error,130))
 
-    def _update_saved_status(self):
+    def _update_saved_status(self,select_id=None):
         index=self.page_combo.current()
         target=self.current_target if self.client and self.client.connected else self.pages[index] if 0<=index<len(self.pages) else None
         try:
             selected=page_identity(target.get('url','') if target else '')
         except ValueError:
             self.saved_status.set(f'共已保存 {len(self.records)} 项 · 选页后显示本页数量')
-            if hasattr(self,'record_tree'):self._refresh_record_list(None)
+            if hasattr(self,'record_list'):self._refresh_record_list(None)
             return
         count=0
         for record in self.records.values():
@@ -396,7 +397,7 @@ class PickerApp:
             except ValueError:continue
             if (page['origin'],page['path'])==(selected['origin'],selected['path']):count+=1
         self.saved_status.set(f'本页已保存 {count} 项 · 仅含已落盘标注')
-        if hasattr(self,'record_tree'):self._refresh_record_list(selected)
+        if hasattr(self,'record_list'):self._refresh_record_list(selected,select_id)
 
     def _selected_page(self):
         index=self.page_combo.current()
@@ -411,7 +412,7 @@ class PickerApp:
         self._queue_fit()
 
     def _refresh_record_list(self,page,select_id=None):
-        selected=select_id or (self.record_tree.selection() or [None])[0]
+        selected=select_id or (self.record_list.selection() or [None])[0]
         records=[];ordered=False
         if page:
             try:
@@ -422,38 +423,33 @@ class PickerApp:
                 self._log('读取本页控件失败：'+str(error));self.status.set(self._safe_text(error,130))
         self._page_records=records
         self.sequence_ordered.set(ordered)
-        self.record_tree.delete(*self.record_tree.get_children())
-        for number,record in enumerate(records,1):
-            annotation=record.get('annotation') or {}
-            name=annotation.get('name') or record.get('control',{}).get('name') or '未命名控件'
-            self.record_tree.insert('', 'end',iid=record['captureId'],values=(number,self._safe_text(name,120),self._safe_text(annotation.get('description',''),500).replace('\n',' ')))
-        ids=[record['captureId'] for record in records]
-        if ids:
-            selected=selected if selected in ids else ids[0]
-            self.record_tree.selection_set(selected);self.record_tree.focus(selected);self.record_tree.see(selected)
+        self.records_heading.set(f'本页控件 · {len(records)}')
+        self.record_list.set_records(records,selected_id=selected)
+        self.record_list.set_ordered(ordered)
         self._record_selection_changed()
 
     def _selected_record(self):
-        selected=(self.record_tree.selection() or [None])[0]
+        selected=(self.record_list.selection() or [None])[0]
         return next((record for record in self._page_records if record['captureId']==selected),None)
 
     def _record_selection_changed(self):
-        record=self._selected_record()
         blocked=self.exporting or self.sending or self.closing or bool(self._pending_save_count()) or bool(self.editor_window)
-        ids=[item['captureId'] for item in self._page_records]
-        index=ids.index(record['captureId']) if record else -1
-        for button,disabled in ((self.edit_record_button,not record),(self.delete_record_button,not record),
-                                (self.move_up_button,index<=0),(self.move_down_button,index<0 or index>=len(ids)-1)):
-            button.configure(state='disabled' if blocked or disabled else 'normal')
-        self.sequence_check.configure(state='disabled' if blocked or not ids else 'normal')
-        if record:
-            annotation=record.get('annotation') or {}
-            actions={'read':'读取','click':'点击','fill':'填写','select':'选择','check':'勾选'}
-            text='、'.join(actions.get(item,item) for item in annotation.get('allowedActions',[])) or '未注明动作'
-            expected=annotation.get('expectedResult') or '尚未填写'
-            self.selection_status.set(self._safe_text(f'{text} · {annotation.get("description","")}\n预期：{expected}',210))
-        else:self.selection_status.set('本页还没有标注，请在网页右键保存。')
+        self.record_list.set_busy(blocked)
+        self.record_list.set_ordered(self.sequence_ordered.get())
+        self.sequence_check.configure(state='disabled' if blocked or not self._page_records else 'normal')
         self._queue_fit()
+
+    def _select_record(self,capture_id):
+        self._record_selection_changed()
+
+    def _edit_record(self,capture_id):
+        self.record_list.select(capture_id);self.edit_selected_record()
+
+    def _delete_record(self,capture_id):
+        self.record_list.select(capture_id);self.delete_selected_record()
+
+    def _move_record(self,capture_id,direction):
+        self.record_list.select(capture_id);self.move_selected_record(direction)
 
     def _can_edit_records(self):
         if self.exporting or self.sending or self.closing or self._pending_save_count():
@@ -467,8 +463,7 @@ class PickerApp:
             raise RuntimeError('正在保存或交接，请完成后再保存修改。')
         record=self._workspace().update_capture(capture_id,annotation)
         self.records[capture_id]=record
-        self._update_saved_status()
-        self._refresh_record_list(self._selected_page(),capture_id)
+        self._update_saved_status(capture_id)
         self.status.set('已保存修改；下次发送将使用更新后的控件信息。')
         return record
 
@@ -548,6 +543,7 @@ class PickerApp:
         try:
             page=self._selected_page();ids=[item['captureId'] for item in self._page_records]
             self._workspace().set_page_sequence(page,ids,ordered=self.sequence_ordered.get())
+            self._record_selection_changed()
             self.status.set('已注明操作顺序；这表示你的流程说明，尚未执行验证。' if self.sequence_ordered.get() else '已取消操作顺序声明，列表仅供整理。')
         except Exception as error:
             self.status.set(self._safe_text(error,160));self._refresh_record_list(self._selected_page())
@@ -633,6 +629,9 @@ class PickerApp:
             if not self.workspace_value.strip():self.status.set('记录目录不能为空。');return
             self.reload_records();self._log('已应用本次设置。');w.destroy()
         self.settings_done_button=ttk.Button(body,text='完成',command=done);self.settings_done_button.grid(row=5,column=2,sticky='e')
+        secondary=ttk.Frame(body);secondary.grid(row=5,column=0,columnspan=2,sticky='w')
+        ttk.Button(secondary,text='打开记录目录',style='Quiet.TButton',command=self.open_record_folder).pack(side='left')
+        ttk.Button(secondary,text='查看日志',style='Quiet.TButton',command=self.open_log).pack(side='left',padx=(8,0))
         self._settings_connection_controls=(ep,chrome,browse_chrome)
         self._settings_workspace_controls=(folder,browse)
         self._settings_zcode_controls=(zcode,browse_zcode)
@@ -949,7 +948,7 @@ def main():
     args = parser.parse_args()
     if args.package_check:
         import websocket
-        report = {'version': VERSION, 'uiMode': 'floating', 'minimumCollapsedWindowSize': [380, 210], 'controlManagement': ['view', 'edit', 'soft-delete', 'reorder', 'declare-sequence'], 'automaticModelCalls': False, 'handoffBackend': 'app-server-with-desktop-index', 'permissionMode': 'yolo', 'permissionLabel': '完全访问', 'zcodeRunnerImported': 'zcode_runner' in sys.modules, 'pickerScriptExists': SCRIPT.is_file(), 'bundledSkillExists': (skill_source() / 'SKILL.md').is_file(), 'iconExists': ICON.is_file(), 'tkVersion': tk.TkVersion, 'websocketVersion': websocket.__version__, 'openedWindow': False, 'connectedBrowser': False}
+        report = {'version': VERSION, 'uiMode': 'floating', 'controlPresentation': 'cards', 'fontAwareLayout': True, 'minimumCollapsedWindowSize': [360, 210], 'controlManagement': ['view', 'edit', 'soft-delete', 'reorder', 'declare-sequence'], 'automaticModelCalls': False, 'handoffBackend': 'app-server-with-desktop-index', 'permissionMode': 'yolo', 'permissionLabel': '完全访问', 'zcodeRunnerImported': 'zcode_runner' in sys.modules, 'pickerScriptExists': SCRIPT.is_file(), 'bundledSkillExists': (skill_source() / 'SKILL.md').is_file(), 'iconExists': ICON.is_file(), 'tkVersion': tk.TkVersion, 'websocketVersion': websocket.__version__, 'openedWindow': False, 'connectedBrowser': False}
         args.package_check.parent.mkdir(parents=True, exist_ok=True)
         args.package_check.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
         return
