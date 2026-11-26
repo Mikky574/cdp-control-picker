@@ -30,10 +30,18 @@ class FakeCDP:
     def connect(self, target):
         self.connected = target
 
+    def create_blank_page(self):
+        target = {'id': 'picker-created', 'type': 'page', 'url': 'about:blank'}
+        self.owner.pages.append(target)
+        return target
+
     def call(self, method, params, timeout=10):
         self.calls.append((method, params))
-        if len(self.calls) == 1:
-            return {'result': {'value': {'url': self.owner.live_url, 'title': 'Fixture orders'}}}
+        if method == 'Page.navigate':
+            self.owner.live_url = params['url']
+            return {'frameId': 'fixture'}
+        if 'document.readyState' in params.get('expression', '') and 'expectedLiveUrl' not in params['expression']:
+            return {'result': {'value': {'url': self.owner.live_url, 'title': 'Fixture orders', 'ready': 'complete'}}}
         if self.owner.failure:
             raise ConnectionError('RAW_PRIVATE_TRANSPORT_DETAIL')
         return {'result': {'value': copy.deepcopy(self.owner.observed)}}
@@ -104,6 +112,34 @@ class TaskTests(unittest.TestCase):
         self.assertEqual(result['page']['url'], 'https://example.test/orders')
         self.assertEqual(result['page']['urlSha256'], self.digest(PAGE))
         self.assertNotIn('DO_NOT_PERSIST', self.output.read_text(encoding='utf-8'))
+
+    def test_ensure_reopens_known_address_and_reuses_only_its_binding(self):
+        url = self.bundle['page']['url']
+        self.bundle['connection']['initialUrlSha256'] = self.digest(url)
+        self.pages = self.pages[:1]
+        self.job['operation'] = 'ensure-page'
+        restored = self.execute()
+        self.assertEqual(restored['status'], 'completed', restored)
+        self.assertEqual((restored['targetId'], restored['reopened']), ('picker-created', True))
+        self.assertIn(('Page.navigate', {'url': url}), self.clients[-1].calls)
+        repeated = self.execute()
+        self.assertEqual((repeated['targetId'], repeated['reopened']), ('picker-created', False))
+        self.assertEqual(len(self.pages), 2)
+        self.job.update(operation='inspect', expectedUrlHash=restored['page']['urlSha256'])
+        self.assertEqual(self.execute()['status'], 'completed')
+        self.assertEqual(self.clients[-1].connected['id'], 'picker-created')
+
+    def test_ensure_requires_known_clean_route_without_copying_original_private_parameters(self):
+        self.pages = self.pages[:1]
+        self.job['operation'] = 'ensure-page'
+        self.assertEqual(self.execute()['error']['code'], 'reopen-url-needed')
+        for address in (PAGE, 'https://other.test/orders'):
+            with self.subTest(address=address):
+                self.job['reopenUrl'] = address
+                self.assertEqual(self.execute()['error']['code'], 'unsafe-reopen-url')
+        self.assertEqual(len(self.pages), 1)
+        self.job['reopenUrl'] = self.bundle['page']['url']
+        self.assertTrue(self.execute()['reopened'])
 
     def test_missing_or_duplicate_target_never_uses_same_url_fallback(self):
         for pages in ([self.pages[0]], [self.pages[1], self.pages[1]]):

@@ -1,6 +1,6 @@
 """Small, threaded CDP transport for an existing loopback Chrome endpoint.
 
-No browser is launched, no page is opened, and close() only drops this transport.
+No browser is launched, and close() only drops this transport.
 Requires websocket-client at connection time; HTTP discovery uses the stdlib.
 Events are delivered as one dictionary argument on a separate callback thread.
 """
@@ -136,19 +136,7 @@ class CDPClient:
 
     def list_pages(self) -> list[dict]:
         """Discover pages without choosing, creating, activating or navigating one."""
-        request = urllib.request.Request(self.endpoint + "/json/list", headers={"Accept": "application/json"})
-        # Local control traffic must not leak through HTTP_PROXY/system proxies.
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoDiscoveryRedirect())
-        try:
-            with opener.open(request, timeout=self.http_timeout) as response:
-                data = response.read(8 * 1024 * 1024 + 1)
-            if len(data) > 8 * 1024 * 1024:
-                raise CDPError("CDP discovery response is unexpectedly large")
-            targets = json.loads(data.decode("utf-8"))
-        except CDPError:
-            raise
-        except (OSError, urllib.error.URLError, UnicodeError, json.JSONDecodeError) as error:
-            raise CDPDisconnectedError(f"Cannot discover Chrome pages: {type(error).__name__}: {error}") from error
+        targets = self._request_json("/json/list")
         if not isinstance(targets, list):
             raise CDPError("CDP /json/list did not return a target list")
         pages = []
@@ -160,6 +148,28 @@ class CDPClient:
                 page[key] = str(page.get(key) or "")
             pages.append(page)
         return pages
+
+    def create_blank_page(self) -> dict:
+        """Create one blank tab in the browser's default profile."""
+        target = self._request_json("/json/new?about%3Ablank", method="PUT")
+        if not isinstance(target, dict) or target.get("type") != "page" or not target.get("id"):
+            raise CDPError("CDP did not return the newly created page")
+        return target
+
+    def _request_json(self, path, method="GET"):
+        request = urllib.request.Request(self.endpoint + path, method=method, headers={"Accept": "application/json"})
+        # Local control traffic must not leak through HTTP_PROXY/system proxies.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoDiscoveryRedirect())
+        try:
+            with opener.open(request, timeout=self.http_timeout) as response:
+                data = response.read(8 * 1024 * 1024 + 1)
+            if len(data) > 8 * 1024 * 1024:
+                raise CDPError("CDP discovery response is unexpectedly large")
+            return json.loads(data.decode("utf-8"))
+        except CDPError:
+            raise
+        except (OSError, urllib.error.URLError, UnicodeError, json.JSONDecodeError) as error:
+            raise CDPDisconnectedError(f"Chrome target request failed: {type(error).__name__}: {error}") from error
 
     def _socket_url(self, target: dict) -> str:
         try:

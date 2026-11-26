@@ -60,6 +60,7 @@ class WorkspaceLearningTests(unittest.TestCase):
                 self.assertNotIn('privateRecord=', path.read_text(encoding='utf-8'))
         self.assertEqual(payload['runtime'], {'command': self.runtime,
                                              'requestFlag': '--cdp-task', 'outputFlag': '--output',
+                                             'pageRecovery': 'ensure-page',
                                              'networkOperations': ['observe-network', 'query-json']})
 
     def test_learning_context_links_both_skills_and_real_output_directory(self):

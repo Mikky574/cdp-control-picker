@@ -8,12 +8,13 @@ CDP 是 Chrome 的本机调试入口。ZCode 连接桥与 Chrome 需要分别验
 |---|---|
 | 已有可达的 Chrome CDP | 把实际本机入口填入采集器的「设置 → 学习工作区 → CDP 地址」。点「启动 Chrome」复用窗口，或直接「刷新」。确认登录账号和目标网页。 |
 | 没有 CDP，但装了 Google Chrome | 保留默认可用端口，Chrome 路径留空，点「启动 Chrome」。也可显式选择 Chrome 的实际 `chrome.exe`；点保存后再次启动。安装普通 Chrome 可用 [Google 官方下载页](https://www.google.com/chrome/)。 |
-| Windows x64 没有 Chrome | 完整解压便携包，在与 EXE 同级的目录双击 `Prepare-Chrome.cmd`。它从 [Google 的 Stable 目录](https://googlechromelabs.github.io/chrome-for-testing/)下载和校验完整的 `chrome-win64.zip`，解压到 `optional-dependencies/chrome-win64/`。结果显示 `ready` 或 `already-ready` 后，回采集器点「启动 Chrome」。 |
+| Windows x64 没有 Chrome，已拿到带 Chromium 的 GitHub 部署整包 | 完整解压，运行 EXE 并点「启动 Chrome」。程序自动从 `optional-dependencies/chrome-win64/` 启动随包的 Chromium，无需额外下载或安装权限。 |
+| Windows x64 没有 Chrome，使用未包含浏览器的旧便携包 | 双击与 EXE 同级的 `Prepare-Chrome.cmd`，从 [Google 的 Stable 目录](https://googlechromelabs.github.io/chrome-for-testing/)准备桌面版 Chrome。显示 `ready` 或 `already-ready` 后回采集器点「启动 Chrome」。 |
 | 已拿到带离线安装器的 Windows x64 整包 | 完整解压。若系统没装 Chrome，打开 `optional-dependencies/GoogleChromeStandaloneEnterprise64.msi`，核对 Windows 显示发布者为 Google LLC，按 Windows 安装向导处理。安装好回采集器点「启动 Chrome」。该机器能从官方 MSI 离线安装，无需运行准备脚本。 |
-| 目标机不能下载 | 在能联网的 Windows x64 电脑完成上一行，再把便携程序和整个 `optional-dependencies/chrome-win64/` 一起带到目标机。也可下载 [Google 官方桌面 Chrome ZIP](https://googlechromelabs.github.io/chrome-for-testing/)，按目录结构完整解压。保留 DLL、资源及语言文件。 |
+| 目标机不能下载 | 将随包带浏览器的 GitHub 部署 ZIP 拷贝到目标机后完整解压。打开网站和使用远程模型仍需要相应网络。 |
 | 9222 被别的服务占用 | 保存该服务的运行状态，将采集器改用空闲本机端口，例如 `http://127.0.0.1:9223`，点「保存并完成」再启动。独立设置的端口下次打开仍会使用。 |
 
-浏览器选择顺序为明确指定的 Chrome 路径、系统已安装 Chrome、便携可选 Chrome。迁移后旧 `chrome.exe` 路径失效时，先清空它以启用自动查找，或重新选择目标机的程序文件。要主动使用可选版本，即使系统也装了 Chrome，也可选 `optional-dependencies/chrome-win64/chrome.exe`。Windows x64 可选完整浏览器是 Chrome for Testing 的 `chrome` 资产，带桌面窗口；ChromeDriver 和 Headless Shell 不用于这条流程。该版本不自动更新，按需要从官方重新准备版本，选择有正常更新机制的常规 Chrome 也可。见 [Google 下载说明](https://developer.chrome.com/docs/automation-and-testing/download-test-binaries)。
+浏览器选择顺序为明确指定的路径、系统已安装 Google Chrome、随包便携浏览器。迁移后旧 `chrome.exe` 路径失效时，清空它以启用自动查找，也可明确选新机的程序。需要强制使用随包浏览器时，选 `optional-dependencies/chrome-win64/chrome.exe`。新部署包带桌面版 [Chromium](https://www.chromium.org/getting-involved/download-chromium/)，适合离线部署和 CDP 试用。该快照不会自动更新。需要日常自动更新的 Google Chrome 时，从 [Google 官网](https://www.google.com/chrome/) 安装。
 
 ## 固定专用登录资料
 

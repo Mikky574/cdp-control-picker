@@ -9,7 +9,7 @@
 - `runtime.command`：命令参数数组；冻结包通常只有 EXE 路径，源码运行可能是 Python 路径加 `app.py`。保留数组中的每个参数，不拼 shell 字符串。
 - `learning.directory`：本包的学习目录，`learning.skillRef` 是学习技能相对路径。相对路径都从页面包所在目录解析。
 
-`context.md` 是本地资料入口，不是 ZCode 服务地址。`handoff-...` 只用于交接日志和协议请求关联；不要把它当作 selector、Chrome 页签或 ZCode 对话 ID。选择页签只依照 `connection.targetId`，定位控件只使用包内 `captureId` 对应的定位证据。
+`context.md` 是本地资料入口，不是 ZCode 服务地址。`handoff-...` 只用于交接日志和协议请求关联。运行器查找原 `connection.targetId` 或本包实际恢复的页签。定位控件使用包内 `captureId` 对应的证据。
 
 ## 执行一次请求
 
@@ -37,6 +37,7 @@
 
 | operation | 用途 | 额外输入 |
 |---|---|---|
+| `ensure-page` | 原页签仍在时校验；关闭后通过同一个 CDP 端点新开已知网址，验证后绑定给本包 | 可选 `reopenUrl`，用于原始 URL 含查询或片段的已验证无凭证入口 |
 | `inspect` | 实际核对当前页和所有已标注控件 | 无 |
 | `read-page` | 读取有限、必要的当前页面文本 | 无；不读取输入值、脚本或凭证 |
 | `act` | 对一个已标注控件执行一个动作 | `captureId`、`action`、`purposeScope`；需要参数的动作另传 `value` |
@@ -44,6 +45,14 @@
 | `query-json` | 在当前页面会话发送一次已验证的同源 GET，返回指定 JSON 字段 | `purposeScope` 为 `read-only`，提供 `request` |
 
 两个网络操作需要新包的 `runtime.networkOperations` 声明。见 [网络观察与一次查询](learn-network.md)。
+
+## 页签关闭后的启动与续接
+
+新版运行器的 `ensure-page` 同样支持之前的 `learn-and-verify` 包。用原 `bundlePath` 和新版 EXE 调用 `ensure-page`。原页签仍在时复用；关闭后在原 CDP 浏览器的普通配置中打开包内 HTTP(S) 地址，核对实际路由。回执包含 `targetId`、`reopened` 和 `page.urlSha256`。后续用同一个包和回执指纹运行 `inspect`、`query-json` 或必要的页面步骤。运行器会找到本包绑定的新页签。
+
+如果 `reopen-url-needed`，使用本次任务给出的原始无凭证网址，或已验证能加载此能力的规范入口。不猜查询参数、不拼身份信息。若旧技能仍指向旧 EXE，迁移调用入口到新版本即可，原标注与结果继续保留。有新版动作策略的旧包即使用原先的 `inspect`、`read-page` 或 `query-json`，在原始规范网址足以恢复时也会自动处理已关闭的页签。复用普通专用配置，不依赖隐身窗口。
+
+遇到登录跳转、站点未就绪或连接失败时按具体错误处理。恢复页面不能证明业务动作已成功，也不能用于自动重发结果不明的动作。整个专用浏览器退出时，先使用采集器“启动 Chrome”唤起原来配置。
 
 首次调用可不写 `expectedUrlHash`，运行器用包内初始 URL 指纹校验。后续请求使用上次工具结果中的 `page.urlSha256` 作为 `expectedUrlHash`。这允许在观察结果后继续，但不允许在路由变化后盲用旧页面身份。
 
