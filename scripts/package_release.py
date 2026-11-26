@@ -90,6 +90,10 @@ def package(version, executable, build_info, output):
     (output / 'BUILD-INFO.json').write_bytes(metadata_bytes)
     (output / 'USAGE-zh-CN.txt').write_bytes(usage)
     inner = {target.name: binary, 'USAGE-zh-CN.txt': usage, 'BUILD-INFO.json': metadata_bytes}
+    guide = sources.get('docs/cdp-learning.html')
+    if guide:
+        inner['CDP-Learning-Guide.html'] = guide
+        (output / 'CDP-Learning-Guide.html').write_bytes(guide)
     inner['SHA256SUMS.txt'] = ''.join(f'{digest(data)}  {name}\n' for name, data in sorted(inner.items())).encode('utf-8')
     portable = output / (stem + '.zip')
     archive(portable, inner)
@@ -98,6 +102,7 @@ def package(version, executable, build_info, output):
     skills_zip = output / (stem + '-skills.zip')
     archive(skills_zip, {name.removeprefix('skills/'): data for name, data in sources.items() if name.startswith('skills/')})
     assets = [target, portable, source_zip, skills_zip, output / 'USAGE-zh-CN.txt', output / 'BUILD-INFO.json']
+    if guide:assets.append(output / 'CDP-Learning-Guide.html')
     checksums = output / 'SHA256SUMS.txt'
     checksums.write_text(''.join(f'{digest(path.read_bytes())}  {path.name}\n' for path in assets), encoding='utf-8', newline='\n')
     assets.append(checksums)

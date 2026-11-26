@@ -1,4 +1,6 @@
 """Queue and package diagnostics use fakes; no Tk window or desktop is opened."""
+from contextlib import redirect_stderr
+import io
 import json
 from pathlib import Path
 import queue
@@ -12,15 +14,19 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app
+from send_feedback import SendFeedback
 from workspace import Workspace
 
 
 class FakeValue:
-    def __init__(self):
-        self.value = ""
+    def __init__(self, value=""):
+        self.value = value
 
     def set(self, value):
         self.value = value
+
+    def get(self):
+        return self.value
 
 
 class FakeRoot:
@@ -43,6 +49,28 @@ class FakeRoot:
         self.scheduled.append((delay, callback))
 
 
+class Widget:
+    def __init__(self):
+        self.options = {}
+
+    def configure(self, **options):
+        self.options.update(options)
+
+    def winfo_exists(self):
+        return True
+
+
+class Combo(Widget):
+    def __init__(self, index=0):
+        super().__init__()
+        self.index = index
+
+    def current(self, value=None):
+        if value is not None:
+            self.index = value
+        return self.index
+
+
 class AppDiagnosticsTests(unittest.TestCase):
     def fake_app(self, failure=None):
         picker = app.PickerApp.__new__(app.PickerApp)
@@ -58,9 +86,15 @@ class AppDiagnosticsTests(unittest.TestCase):
         picker.capture_enabled = True
         picker.client = None
         picker.current_target = None
+        picker.endpoint = FakeValue('http://127.0.0.1:19333')
         picker.pages = []
         picker.page_combo = SimpleNamespace(current=lambda: -1)
         picker.records = {}
+        picker._page_records = []
+        picker.sequence_ordered = FakeValue(False)
+        picker.send_feedback = SendFeedback()
+        picker._feedback_workspace = None
+        picker.send_feedback.select('a' * 64)
         picker.exporting = picker.sending = True
         picker.logs = []
         picker._log = picker.logs.append
@@ -71,6 +105,43 @@ class AppDiagnosticsTests(unittest.TestCase):
         }))
         picker.events.put(("page-export-finished", None))
         return picker
+
+    def prepared_sender(self):
+        temporary = tempfile.TemporaryDirectory(prefix="picker-send-controller-")
+        self.addCleanup(temporary.cleanup)
+        workspace = Workspace(Path(temporary.name))
+        page = "https://example.test/orders"
+        for capture_id in ("cap-first", "cap-next"):
+            workspace.save_capture({"captureId": capture_id, "page": {"url": page},
+                                    "control": {"tagName": "button"},
+                                    "annotation": {"name": capture_id, "description": "查看信息"}})
+        picker = self.fake_app()
+        picker.events = queue.Queue()
+        picker.exporting = picker.sending = picker.closing = picker.connecting = False
+        picker.capture_enabled = False
+        picker.editor_window = None
+        picker.page_combo = Combo()
+        picker.pages = [{"url": page, "id": "fixture-page", "title": "虚构订单页"}]
+        picker.page_choice = FakeValue()
+        picker.capture_status = FakeValue()
+        picker.endpoint = FakeValue("http://127.0.0.1:19222")
+        picker._refresh_selected_id = "fixture-page"
+        picker._refresh_pages_backend = lambda: None
+        picker.zcode_path = FakeValue(r"C:\Installed\ZCode\ZCode.exe")
+        picker.workspace_value = str(workspace.root)
+        picker._feedback_workspace = str(workspace.root)
+        picker.send_feedback = SendFeedback(receipt_path=workspace.root / '.handoffs' / 'ui-receipts.json')
+        picker._workspace = lambda: workspace
+        picker._page_records = workspace.list_page_captures(page)
+        picker.records = {record['captureId']: record for record in picker._page_records}
+        picker.send_feedback.select(picker._page_revision())
+        picker._queue_fit = lambda *args: None
+        picker._background = lambda action: action()
+        for name in ('connect_button', 'disconnect_button', 'send_button', 'export_button',
+                     'launch_button', 'refresh_button', 'endpoint_entry'):
+            setattr(picker, name, Widget())
+        picker._controls = lambda: app.PickerApp._controls(picker)
+        return picker, workspace
 
     def test_clipboard_failure_keeps_event_pump_and_finishes_export(self):
         for failure in ("clear", "append"):
@@ -113,6 +184,16 @@ class AppDiagnosticsTests(unittest.TestCase):
             self.assertNotIn("desktopBridgeExists", report)
             self.assertFalse(report["openedWindow"])
             self.assertFalse(report["connectedBrowser"])
+            self.assertFalse(report["automaticModelCalls"])
+            for key in ("originalToolbarLayout", "persistentSendFeedback",
+                        "contentSendGuard", "chromeWindowActivation"):
+                self.assertIs(report[key], True)
+            self.assertEqual(report['controlPresentation'], 'rows')
+            self.assertEqual(report['minimumCollapsedWindowSize'], [280, 210])
+            self.assertEqual(report['defaultHandoffIntent'], 'learn-and-verify')
+            self.assertTrue(report['headlessCdpTask'])
+            self.assertTrue(report['cdpTaskScriptExists'])
+            self.assertTrue(report['learningSkillExists'])
 
     def test_handoff_requires_registered_index_and_session(self):
         cases = [
@@ -135,6 +216,47 @@ class AppDiagnosticsTests(unittest.TestCase):
                 self.assertFalse(picker.sending)
                 self.assertEqual(len(picker.root.scheduled), 1)
 
+    def test_scoped_cdp_task_runs_before_tk_and_returns_a_protocol_exit_code(self):
+        with tempfile.TemporaryDirectory(prefix='picker-headless-task-') as temporary:
+            request = Path(temporary) / 'task.json'
+            output = Path(temporary) / 'result.json'
+            for status, expected_exit in (('completed', 0), ('blocked', 2), ('failed', 2)):
+                calls = []
+
+                def run_task(selected_request, selected_output):
+                    calls.append((selected_request, selected_output))
+                    selected_output.write_text(json.dumps({'status': status}), encoding='utf-8')
+                    return {'status': status}
+
+                with self.subTest(status=status), \
+                     patch.object(sys, 'argv', ['app.py', '--cdp-task', str(request), '--output', str(output)]), \
+                     patch.dict(sys.modules, {'cdp_task': SimpleNamespace(run_task=run_task)}), \
+                     patch.object(app.tk, 'Tk', side_effect=AssertionError('Headless CDP task must not open UI')):
+                    with self.assertRaises(SystemExit) as raised:
+                        app.main()
+                    self.assertEqual(raised.exception.code, expected_exit)
+                    self.assertEqual(calls, [(request, output)])
+                    self.assertEqual(json.loads(output.read_text(encoding='utf-8'))['status'], status)
+
+    def test_scoped_cdp_task_requires_output_and_orphan_output_cannot_open_ui(self):
+        for arguments in (['--cdp-task', 'fixture-task.json'], ['--output', 'fixture-output.json']):
+            with self.subTest(arguments=arguments), \
+                 patch.object(sys, 'argv', ['app.py', *arguments]), \
+                 patch.dict(sys.modules, {'cdp_task': SimpleNamespace(
+                     run_task=lambda *_: self.fail('Invalid arguments must not execute tasks'))}), \
+                 patch.object(app.tk, 'Tk', side_effect=AssertionError('Invalid CDP arguments must not open UI')), \
+                 redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as raised:
+                    app.main()
+                self.assertEqual(raised.exception.code, 2)
+
+    def test_runtime_command_reuses_the_frozen_executable_or_source_entrypoint(self):
+        with patch.object(app.sys, 'frozen', True, create=True):
+            self.assertEqual(app.cdp_runtime_command(), [str(Path(sys.executable).resolve())])
+        with patch.object(app.sys, 'frozen', False, create=True):
+            self.assertEqual(app.cdp_runtime_command(), [str(Path(sys.executable).resolve()),
+                                                        str(Path(app.__file__).resolve())])
+
     def test_send_uses_lazy_cli_adapter_with_selected_workspace_and_program(self):
         picker = self.fake_app()
         picker.events = queue.Queue()
@@ -143,8 +265,17 @@ class AppDiagnosticsTests(unittest.TestCase):
         picker.page_combo = SimpleNamespace(current=lambda: 0)
         picker.pages = [{"url": "https://example.test/orders?filter=a", "id": "fixture-page"}]
         picker.zcode_path = SimpleNamespace(get=lambda: r"C:\Installed\ZCode\ZCode.exe")
-        bundle = {"bundleId": "page-fixture", "captureCount": 2, "shortTask": "Read task."}
-        workspace = SimpleNamespace(export_page_bundle=lambda page: bundle)
+        temporary = tempfile.TemporaryDirectory(prefix="picker-fake-handoff-")
+        self.addCleanup(temporary.cleanup)
+        workspace = Workspace(Path(temporary.name))
+        for capture_id, name in (("cap-input", "编号"), ("cap-search", "查询")):
+            workspace.save_capture({"captureId": capture_id,
+                                    "page": {"url": "https://example.test/orders"},
+                                    "control": {"tagName": "button"},
+                                    "annotation": {"name": name, "description": "功能：" + name}})
+        picker._page_records = workspace.list_page_captures("https://example.test/orders")
+        picker.workspace_value = str(workspace.root)
+        picker._feedback_workspace = str(workspace.root)
         picker._workspace = lambda: workspace
         picker._background = lambda action: action()
         calls = []
@@ -158,12 +289,199 @@ class AppDiagnosticsTests(unittest.TestCase):
                 on_event({"type": "progress", "message": "fixture progress"})
                 return {"status": "registered", "indexRegistered": True, "sessionId": "session-fixture"}
 
-        with patch.dict(sys.modules, {"zcode_handoff": SimpleNamespace(ZCodeHandoff=FakeHandoff)}):
+        inspector = lambda selected_workspace, bundle: {"canSubmit": True}
+        with patch.dict(sys.modules, {"zcode_handoff": SimpleNamespace(
+                ZCodeHandoff=FakeHandoff, inspect_handoff=inspector)}):
             picker.send_page_to_zcode()
-        self.assertEqual(calls, [(workspace, r"C:\Installed\ZCode\ZCode.exe"), bundle])
+        self.assertEqual(calls[0], (workspace, r"C:\Installed\ZCode\ZCode.exe"))
+        bundle = calls[1]
+        self.assertEqual(bundle["captureCount"], 2)
+        self.assertTrue(Path(bundle["bundlePath"]).is_file())
+        payload = json.loads(Path(bundle['bundlePath']).read_text(encoding='utf-8'))
+        self.assertEqual(payload['taskIntent']['mode'], 'learn-and-verify')
+        self.assertEqual(payload['connection']['endpoint'], picker.endpoint.get())
+        self.assertEqual(payload['connection']['targetId'], 'fixture-page')
+        self.assertEqual(payload['runtime']['command'], app.cdp_runtime_command())
+        self.assertEqual(picker.events.queue[0][0], "handoff-bundle")
         picker._drain()
         self.assertIn("已交给 ZCode", picker.status.value)
         self.assertFalse(picker.sending)
+        self.assertFalse(picker._send_state().can_send(picker._page_revision()))
+
+    def test_same_tick_duplicate_has_persistent_feedback_without_creating_an_adapter(self):
+        picker, _ = self.prepared_sender()
+        previous = {'status': 'registered', 'indexRegistered': True,
+                    'sessionId': 'sess_duplicate_fixture', 'mode': 'yolo',
+                    'responseSummary': '已收到控件上下文。'}
+        inspect = lambda *_: {'duplicate': True, 'canSubmit': False,
+                             'canRegister': False, 'previous': previous}
+        with patch.dict(sys.modules, {'zcode_handoff': SimpleNamespace(
+                inspect_handoff=inspect,
+                ZCodeHandoff=lambda *_args, **_kwargs: self.fail('Duplicate must not construct adapter'))}):
+            picker.send_page_to_zcode()
+        picker._drain()
+        view = picker._send_state().view()
+        self.assertEqual(view['phase'], 'duplicate')
+        self.assertTrue(view['blocked'])
+        self.assertFalse(view['active'])
+        self.assertIn('没有重复提交', view['message'])
+        self.assertEqual(picker.send_button.options['state'], 'disabled')
+        with patch.object(picker, '_background') as worker:
+            picker.send_page_to_zcode()
+        worker.assert_not_called()
+        self.assertEqual(picker._send_state().view()['phase'], 'duplicate')
+
+    def test_legacy_duplicate_mode_still_uses_the_permission_upgrade_backend(self):
+        for mode in ('edit', None):
+            with self.subTest(mode=mode):
+                picker, _ = self.prepared_sender()
+                previous = {'status': 'registered', 'indexRegistered': True,
+                            'sessionId': 'sess_upgrade_fixture', 'mode': mode}
+                calls = []
+
+                class MetadataOnlyAdapter:
+                    def __init__(self, *_args, **_kwargs):
+                        calls.append('adapter')
+
+                    def send(self, _bundle, on_event=None):
+                        calls.append('send')
+                        return {**previous, 'mode': 'yolo', 'duplicate': True}
+
+                with patch.dict(sys.modules, {'zcode_handoff': SimpleNamespace(
+                        inspect_handoff=lambda *_: {'duplicate': True, 'canSubmit': False,
+                                                   'canRegister': False, 'previous': previous},
+                        ZCodeHandoff=MetadataOnlyAdapter)}):
+                    picker.send_page_to_zcode()
+                picker._drain()
+                self.assertEqual(calls, ['adapter', 'send'])
+                self.assertEqual(picker._send_state().view()['phase'], 'duplicate')
+
+    def test_browser_refresh_and_launch_notice_do_not_replace_send_feedback(self):
+        picker, _ = self.prepared_sender()
+        picker._send_state().begin(picker._page_revision())
+        picker._send_state().complete({'status': 'registered', 'indexRegistered': True,
+                                       'sessionId': 'sess_browser_fixture'})
+        before = picker._send_state().view()
+        notice = '已找到Chrome，但系统未确认前台激活，请从任务栏打开。'
+        picker.events.put(('browser-started', {'status': 'reused', 'message': notice,
+                                              'visible': True, 'foreground': False}))
+        picker.events.put(('pages', list(picker.pages)))
+        picker._drain()
+        self.assertEqual(picker.status.value, notice)
+        after = picker._send_state().view()
+        for key in ('phase', 'title', 'message', 'completedAt', 'result'):
+            self.assertEqual(after[key], before[key])
+        self.assertEqual(picker.send_button.options['state'], 'disabled')
+
+    def test_error_before_export_finished_keeps_the_actual_failure_classification(self):
+        for uncertain, expected in ((False, 'failed'), (True, 'unknown')):
+            with self.subTest(uncertain=uncertain):
+                picker, _ = self.prepared_sender()
+                revision = picker._page_revision()
+                picker._send_state().begin(revision)
+                picker.exporting = picker.sending = True
+                picker.events.put(('handoff-error', {'message': 'fixture发送异常',
+                                                     'uncertain': uncertain}))
+                picker.events.put(('page-export-finished', None))
+                picker._drain()
+                self.assertEqual(picker._send_state().view()['phase'], expected)
+                self.assertEqual(picker._send_state().can_send(revision), not uncertain)
+                self.assertIn('fixture发送异常', picker._send_state().view()['message'])
+                self.assertFalse(picker.sending)
+
+    def test_export_finished_without_a_result_becomes_unknown_and_blocks_repeat(self):
+        picker, _ = self.prepared_sender()
+        revision = picker._page_revision()
+        picker._send_state().begin(revision)
+        picker.exporting = picker.sending = True
+        picker.events.put(('page-export-finished', None))
+        picker._drain()
+        self.assertEqual(picker._send_state().view()['phase'], 'unknown')
+        self.assertFalse(picker._send_state().can_send(revision))
+        self.assertFalse(picker.sending)
+
+    def test_second_send_is_blocked_while_the_first_worker_is_still_pending(self):
+        picker, _ = self.prepared_sender()
+        workers = []
+        picker._background = workers.append
+        picker.send_page_to_zcode()
+        picker.send_page_to_zcode()
+        self.assertEqual(len(workers), 1)
+        self.assertTrue(picker._send_state().view()['active'])
+        self.assertEqual(picker.send_button.options['state'], 'disabled')
+        self.assertEqual(picker.page_combo.options['state'], 'disabled')
+
+    def test_late_capture_changes_the_bundle_and_stops_before_any_backend_submission(self):
+        picker, workspace = self.prepared_sender()
+        revision = picker._page_revision()
+        workers = []
+        picker._background = workers.append
+        picker.send_page_to_zcode()
+        workspace.save_capture({'captureId': 'cap-late', 'page': {'url': picker.pages[0]['url']},
+                                'control': {'tagName': 'input'},
+                                'annotation': {'name': '迟到的输入框', 'description': '新保存的控件'}})
+        inspector = unittest.mock.Mock(side_effect=AssertionError('Must reject stale UI snapshot first'))
+        adapter = unittest.mock.Mock(side_effect=AssertionError('Must not construct backend'))
+        with patch.dict(sys.modules, {'zcode_handoff': SimpleNamespace(
+                inspect_handoff=inspector, ZCodeHandoff=adapter)}):
+            workers[0]()
+        picker._drain()
+        inspector.assert_not_called()
+        adapter.assert_not_called()
+        self.assertEqual(picker._send_state().view()['phase'], 'failed')
+        self.assertIn('刚有变化', picker._send_state().view()['message'])
+        self.assertTrue(picker._send_state().can_send(revision))
+
+    def test_annotation_or_order_changes_unlock_the_page_content_guard(self):
+        picker, workspace = self.prepared_sender()
+        original = picker._page_revision()
+        picker._send_state().begin(original)
+        picker._send_state().complete({'status': 'registered', 'indexRegistered': True,
+                                       'sessionId': 'sess_content_fixture'})
+        picker._controls()
+        self.assertEqual(picker.send_button.options['state'], 'disabled')
+        workspace.update_capture('cap-first', {'name': '更新名称', 'description': '更新功能说明'})
+        picker._page_records = workspace.list_page_captures(picker.pages[0]['url'])
+        changed = picker._page_revision()
+        self.assertNotEqual(changed, original)
+        picker._send_state().select(changed)
+        picker._controls()
+        self.assertEqual(picker.send_button.options['state'], 'normal')
+        picker.sequence_ordered.set(True)
+        self.assertNotEqual(picker._page_revision(), changed)
+
+    def test_cdp_endpoint_or_current_target_changes_unlock_the_learning_scope_guard(self):
+        picker, _ = self.prepared_sender()
+        original = picker._page_revision()
+        picker._send_state().begin(original)
+        picker._send_state().complete({'status': 'registered', 'indexRegistered': True,
+                                       'sessionId': 'sess_learning_scope_fixture'})
+        endpoint = picker.endpoint.get()
+        picker.endpoint.set('http://127.0.0.1:19334')
+        changed_endpoint = picker._page_revision()
+        self.assertNotEqual(changed_endpoint, original)
+        self.assertTrue(picker._send_state().can_send(changed_endpoint))
+        picker.endpoint.set(endpoint)
+        self.assertEqual(picker._page_revision(), original)
+        picker.pages[0]['id'] = 'another-current-target'
+        changed_target = picker._page_revision()
+        self.assertNotEqual(changed_target, original)
+        self.assertTrue(picker._send_state().can_send(changed_target))
+
+    def test_copy_exports_learning_instructions_without_constructing_a_model_backend(self):
+        picker, workspace = self.prepared_sender()
+        with patch.dict(sys.modules, {'zcode_handoff': SimpleNamespace(
+                inspect_handoff=lambda *_: self.fail('Copy must not inspect model submissions'),
+                ZCodeHandoff=lambda *_args, **_kwargs: self.fail('Copy must not construct model backend'))}):
+            picker.export_page_task()
+        picker._drain()
+        self.assertIn('学习并实际验证', picker.root.clipboard)
+        bundles = list((workspace.root / 'page-bundles').glob('*/page-bundle.json'))
+        self.assertEqual(len(bundles), 1)
+        payload = json.loads(bundles[0].read_text(encoding='utf-8'))
+        self.assertEqual(payload['taskIntent']['mode'], 'learn-and-verify')
+        self.assertEqual(payload['connection']['endpoint'], picker.endpoint.get())
+        self.assertEqual(payload['connection']['targetId'], picker.pages[0]['id'])
 
     @staticmethod
     def binding(payload):
@@ -209,7 +527,7 @@ class AppDiagnosticsTests(unittest.TestCase):
         token = next(iter(picker._pending_saves))
         picker._finish_pending_save(token)
         app.PickerApp._controls(picker)
-        self.assertEqual(picker.send_button.options["text"], "发给 ZCode")
+        self.assertEqual(picker.send_button.options["text"], "交给 ZCode 学习")
         self.assertEqual(picker.send_button.options["state"], "normal")
 
     def test_save_worker_releases_pending_after_success_or_error(self):

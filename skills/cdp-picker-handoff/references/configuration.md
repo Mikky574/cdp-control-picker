@@ -6,7 +6,7 @@
 
 | 项目 | 约定 |
 |---|---|
-| CDP | http://127.0.0.1:9222 是本机浏览器端点，不是业务 URL |
+| CDP | 读取本包connection.endpoint的实际本机浏览器端点；127.0.0.1:9222仅为常见示例，不是业务URL |
 | Chrome | 固定专用 Google Chrome/profile，由本人登录，复用已有端点 |
 | 数据 | 源码默认 .local/；冻结 EXE 旁为 CDP-Picker-Workspace 与 CDP-Chrome-Profile |
 | ZCode | 真实安装的 ZCode.exe 与同包 resources/glm/zcode.cjs |
@@ -18,9 +18,9 @@
 
 ## 人的操作
 
-刷新后明确选页，再连接并开启采集；多个同址页签不取第一个。同页分别右键保存控件名、用途、允许动作和预期结果，可展开“本页控件”，再点击“发给 ZCode”。“复制说明”提供读取本包的短任务，供人粘贴到已有会话；复制本身不提交模型。
+刷新后明确选页，再连接并开启采集；多个同址页签不取第一个。同页分别右键保存控件名、用途、允许动作和预期结果，可展开“本页控件”，再点击“发给 ZCode”。“复制交接说明”提供读取本包的短任务，供人粘贴到已有会话；复制本身不提交模型。
 
-合包按规范化 origin/path 或 file URL/path，忽略 query/hash，业务键仍需保留。只支持普通主 frame DOM；iframe、Shadow DOM、Canvas 内部对象不在范围。
+合包按规范化 origin/path 或 file URL/path，忽略 query/hash，业务键仍需保留。学习包另带当前精确targetId和完整URL指纹，运行时依此检查当前页，不靠合包规则猜页签。只支持普通主 frame DOM；iframe、Shadow DOM、Canvas 内部对象不在范围。
 
 ## 本页标注与顺序
 
@@ -34,7 +34,7 @@
 
 zcode_handoff.py 调用 zcode_appserver.py，独立采用 Plaza runtime、SID 保留与订阅结构。ELECTRON_RUN_AS_NODE=1 只作用于子进程；沿用已有认证与模型，后台不依赖桌面焦点，不改全局设置或其他 Plaza 角色。
 
-首轮只读 context.md、完整 page-bundle.json 的定位与用途，简短确认后等待用户继续。不自动生成能力文件、不规划后续、不连接网站或执行业务命令。yolo 是用户保留的执行模式，不是首轮扩展任务。范围写在技能与 context.md；短 prompt 只指向这项交接任务。旧 task.md、generation 字段和 generated/ 兼容保留，不读取旧 task.md，不把它们当本次任务。
+读取context.md和完整page-bundle.json后按taskIntent处理。learn-and-verify再读learning.skillRef与页面技能，使用本包connection/runtime实际核对并尝试获准流程，在learning目录保存证据和能力；context-only或无新意图旧包仍仅确认等待。缺连接或运行入口时说明缺项，不自行猜9222或临时装浏览器环境。yolo是执行模式，不代替业务授权。旧task.md、generation字段和generated/仅兼容保留，不读取旧生成指令。
 
 绑定后记录真实 SID，订阅事件并单次发送。协议 ACK 不等于模型已读或完成，需终态与同 SID 最终回复。恢复旧会话若用原生 session/setMode，可能保存当前选定工作区的权限偏好，last_binding.permissionScope 区分该作用范围。
 
@@ -48,7 +48,7 @@ zcode_runner.py 的 CLI -p 留作源码 fallback，可选 mode、默认 edit，�
 
 - CDP：核对端点、选定页签、开关与主 frame。
 - app-server：区分绑定 SID、受理 ACK、模型确认回复和实际终态。未知结果保留 SID，不重发。
-- 索引：模型已确认但登记失败时只补登记，不再调用模型。相同标注已有对话则复用，不重新交接。
+- 索引：任务已完成但登记失败时只补登记，不再调用模型。只对同资料、同任务意图和连接范围去重，旧确认回执不是学习成功证据。
 - GUI：到对应项目核对同 SID；不预设所有 build 热刷新，不用新会话冒充连续对话。
 
 个人资料、凭据、完整会话与索引备份留本地，诊断仅取必要片段。独立技能包不含源码，不为阅读技能安装另一套运行环境。

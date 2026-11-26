@@ -18,7 +18,7 @@ work = args.workdir.resolve()
 icon = tool / 'assets' / 'app-icon.ico'
 if not icon.is_file():
     parser.error('Missing application icon: ' + str(icon))
-inputs = [path for path in tool.glob('*.py')] + [tool / 'page_picker.js']
+inputs = [path for path in tool.glob('*.py')] + [tool / 'page_picker.js', tool / 'cdp_task.js']
 inputs += [path for directory in ('assets', 'skills') for path in (tool / directory).rglob('*') if path.is_file()]
 def source_digest(path):
     data = path.read_bytes()
@@ -33,6 +33,7 @@ subprocess.run([
     '--icon', str(icon),
     '--add-data', str(tool / 'assets') + ';assets',
     '--add-data', str(tool / 'page_picker.js') + ';.',
+    '--add-data', str(tool / 'cdp_task.js') + ';.',
     '--add-data', str(repository / 'skills') + ';skills',
     str(tool / 'app.py'),
 ], check=True)
