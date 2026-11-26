@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title description">
+  <title id="title">CDP 控件采集器</title>
+  <desc id="description">深蓝色圆角浏览器窗口，白色鼠标指针，青色定位框和橙色定位点。</desc>
+  <rect x="12" y="24" width="232" height="208" rx="38" fill="#132744"/>
+  <path d="M50 24H206Q244 24 244 62V83H12V62Q12 24 50 24Z" fill="#1E3B60"/>
+  <g fill="#8AA9CB">
+    <circle cx="42" cy="53" r="5"/>
+    <circle cx="61" cy="53" r="5"/>
+    <circle cx="80" cy="53" r="5"/>
+  </g>
+  <path d="M87 122V101H108 M138 101H159V122 M87 144V165H108 M138 165H159V144" fill="none" stroke="#27C4B4" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="159" cy="101" r="8" fill="#FFAD4A"/>
+  <path d="M117 123V212L140 190L156 221L176 211L159 178L194 176Z" fill="#FFFFFF" stroke="#132744" stroke-width="4" stroke-linejoin="round"/>
+</svg>

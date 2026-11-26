@@ -1,0 +1,89 @@
+{
+  "schema_note": "教学示例；这是本套装定义的页面约定，不是 CDP 标准，也不会被浏览器自动识别。必须按实际应用修改并验证。",
+  "page": {
+    "name": "订单管理列表",
+    "expected_origin": "https://orders.example.com",
+    "expected_path": "/admin/orders",
+    "query_identity": {},
+    "frame": "main",
+    "ready": {
+      "strategy": "css",
+      "value": "[data-testid=\"orders-page\"]",
+      "expected_count": 1,
+      "state": "visible"
+    }
+  },
+  "elements": {
+    "order_id_filter": {
+      "meaning": "按完整订单号筛选列表，不修改订单",
+      "strategy": "css",
+      "value": "#order-id",
+      "accessible_alternative": { "role": "textbox", "name": "订单号" },
+      "expected_count": 1,
+      "allowed_actions": ["read_value", "fill_filter"]
+    },
+    "search": {
+      "meaning": "按筛选条件重新读取订单列表",
+      "strategy": "css",
+      "value": "[data-testid=\"search-orders\"]",
+      "expected_count": 1,
+      "allowed_actions": ["click_read_query"],
+      "precondition": "订单号筛选框值精确等于 A-1042，页面已就绪",
+      "postcondition": "查询加载结束，列表中出现唯一 A-1042 行；空结果应如实返回"
+    },
+    "orders_table": {
+      "meaning": "当前筛选和分页范围内的订单，不代表全部订单",
+      "strategy": "css",
+      "value": "[data-testid=\"orders-table\"]",
+      "expected_count": 1,
+      "allowed_actions": ["read"]
+    },
+    "target_order": {
+      "meaning": "完整订单号为 A-1042 的订单行，不能按行号代替",
+      "within": "orders_table",
+      "strategy": "css",
+      "value": "tr[data-order-id=\"A-1042\"]",
+      "expected_count": 1,
+      "allowed_actions": ["read"],
+      "identity_check": "订单号单元格文本精确等于 A-1042"
+    },
+    "view_order": {
+      "meaning": "打开该订单的只读详情；会改变页面 UI，但不修改订单数据或状态",
+      "within": "target_order",
+      "strategy": "css",
+      "value": "[data-action=\"view-order\"]",
+      "accessible_alternative": { "role": "button", "name": "详情" },
+      "expected_count": 1,
+      "allowed_actions": ["inspect", "click_view"],
+      "precondition": "唯一行的订单号已核实，按钮可见且可用",
+      "postcondition": "order_detail 可见，detail_order_id 文本精确等于 A-1042，detail_status 已加载且非空"
+    },
+    "order_detail": {
+      "meaning": "当前打开订单的只读详情区域",
+      "strategy": "css",
+      "value": "[data-testid=\"order-detail\"]",
+      "expected_count": 1,
+      "allowed_actions": ["read"]
+    },
+    "detail_order_id": {
+      "meaning": "用来核对详情属于哪个订单，不从列表选择状态推测",
+      "within": "order_detail",
+      "strategy": "css",
+      "value": "[data-field=\"order-id\"]",
+      "expected_count": 1,
+      "allowed_actions": ["read"]
+    },
+    "detail_status": {
+      "meaning": "该订单的业务状态；须等待真实内容，不能将加载中文字作为状态",
+      "within": "order_detail",
+      "strategy": "css",
+      "value": "[data-field=\"status\"]",
+      "expected_count": 1,
+      "allowed_actions": ["read"]
+    }
+  },
+  "not_authorized_by_this_example": ["modify_order", "delete", "pay", "refund"],
+  "on_no_match": "检查页面身份、frame、加载、筛选和分页，报告缺失；不编造 selector 或订单状态",
+  "on_multiple_matches": "读取范围与业务键并缩小定位；不默认取 first/nth",
+  "verification_note": "详情读取仍会改变页面 UI；实际项目应增加查询/详情加载完成标志。本示例不证明未知网站有这些结构。"
+}
