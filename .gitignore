@@ -1,0 +1,42 @@
+# Local runtime data and browser identity
+/.local/
+/CDP-Picker-Workspace/
+/CDP-Chrome-Profile/
+/captures/
+/page-bundles/
+/.logs/
+**/profile/
+**/profiles/
+**/browser-profile/
+**/user-data/
+
+# Development and build artifacts
+/.venv/
+/venv/
+/work/
+/_build/
+/build/
+/dist/
+/outputs/
+__pycache__/
+*.py[cod]
+*.log
+*.exe
+*.zip
+*.spec
+
+# Credentials remain local
+/.env
+/.env.*
+!/.env.example
+/.ssh/
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+cookies*.json
+storageState*.json
+credentials*.json
+*.har
+.DS_Store
+Thumbs.db

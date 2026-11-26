@@ -1,0 +1,82 @@
+{
+  "version": "0.1.0",
+  "sourceRepository": "https://github.com/Mikky574/ai-connection-knowledge",
+  "sourceCommit": "307baaed7ace7fdb2cc1b6d86e3173904187c00e",
+  "executable": "CDP-Control-Picker-v0.1.0.exe",
+  "executableSha256": "3a048839002bec2ff311a517d538d5defc7120fc3e7dc65fe92a566c8d08042b",
+  "sourceFiles": [
+    {
+      "path": "docs/cdp-control-picker.md",
+      "sha256": "e4aeabbe42442d7f0a32e00c6a4457f171bb47811152fa82de07de3cddf30869"
+    },
+    {
+      "path": "docs/cdp-picker-validation.md",
+      "sha256": "268d1eea129c2e60244be5ef400085831cc6ffb3667459bceb50dae29a94c5f1"
+    },
+    {
+      "path": "examples/control-card.example.json",
+      "sha256": "2c6af965feb68ebf79ea01e77780d5df4dee518ce6bcc1307605fa94aee51d35"
+    },
+    {
+      "path": "skills/cdp-page-contract/SKILL.md",
+      "sha256": "20e4142085b5b62a50b038209a0cc6803b2e3e24a778096a77c6a511cd83088a"
+    },
+    {
+      "path": "skills/cdp-page-contract/references/connect-and-inspect.md",
+      "sha256": "db8953c4aac53c591b32e31360afe843b5d35edb0bb637203d7fa3a4e8f16916"
+    },
+    {
+      "path": "skills/cdp-page-contract/references/page-contract.example.json",
+      "sha256": "ffb058e04f9fa0d5d0c09e2056015c44c97c5a9bbb14637accbffc6d62d3a726"
+    },
+    {
+      "path": "tools/cdp-control-picker/README.md",
+      "sha256": "1997e86ba06966b76da274580b1db731d88857f7f4b02469e25c681c17c20167"
+    },
+    {
+      "path": "tools/cdp-control-picker/app.py",
+      "sha256": "413edadb3af7a52f79ea2d435ec0e75be94b37b1c9d9068abf12d5fc06e54b2a"
+    },
+    {
+      "path": "tools/cdp-control-picker/browser_launcher.py",
+      "sha256": "b50ed5f2055e989da071c4930efe54cd72d22b85d9a484142bbe73754416815f"
+    },
+    {
+      "path": "tools/cdp-control-picker/build.py",
+      "sha256": "d6a7505dde2a9bc66d7b256e549e06c07f664dda98710d65fe8eb8d93b6e744e"
+    },
+    {
+      "path": "tools/cdp-control-picker/cdp_client.py",
+      "sha256": "dc85fb0a01ce212f6d4f6ffa297b290d91e1f65b47cc2f936818ed053a0ab4d6"
+    },
+    {
+      "path": "tools/cdp-control-picker/page_picker.js",
+      "sha256": "03e4c3fcfe40c7b0ad6ecf69efcaf7010dac006c198233f60d4006c00a77e6ab"
+    },
+    {
+      "path": "tools/cdp-control-picker/requirements.txt",
+      "sha256": "8ad3a87a62f7f993700979c393813845cb6c852e57c9d39a53049459c22d7da3"
+    },
+    {
+      "path": "tools/cdp-control-picker/tests/test_browser_launcher.py",
+      "sha256": "20de25f312e8884399960dabebe164912afb769ad40a2911d715e527f720ce45"
+    },
+    {
+      "path": "tools/cdp-control-picker/tests/test_cdp_client.py",
+      "sha256": "96d391a4fb03a64f0d67abec97ea6f410203641d06e9617a80faf4dafe967121"
+    },
+    {
+      "path": "tools/cdp-control-picker/tests/test_workspace_runner.py",
+      "sha256": "8be40aae94c834325b23e135d6c88cba71039c8c8e400b86d6853a6edb112596"
+    },
+    {
+      "path": "tools/cdp-control-picker/workspace.py",
+      "sha256": "6904c9e8d4f35b0e34eac9782639ebf75165c6f2e4c92bc7a3c099b51cf6f671"
+    },
+    {
+      "path": "tools/cdp-control-picker/zcode_runner.py",
+      "sha256": "a709b9b43babe778311714976ebb2312508dab674beb8f86b7461f650a3a6914"
+    }
+  ],
+  "note": "Listed source files are byte-identical to their original commit; root release documentation is added for this standalone distribution."
+}

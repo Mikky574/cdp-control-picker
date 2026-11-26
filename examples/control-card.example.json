@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "schemaNote": "本知识库定义的控件卡设计示例，不是 CDP 标准。没有在真实网站采集或验证。",
+  "id": "cap-order-details-example",
+  "status": "draft",
+  "browser": {
+    "connection": "existing-cdp-browser",
+    "profile": "user-selected-fixed-chrome",
+    "endpointConfigKey": "CDP_URL",
+    "identityRequirement": "由用户确认的目标网站账号与工作区"
+  },
+  "page": {
+    "origin": "https://orders.example.com",
+    "path": "/admin/orders",
+    "title": "订单管理",
+    "frameChain": [],
+    "region": "订单列表"
+  },
+  "control": {
+    "tag": "button",
+    "role": "button",
+    "accessibleName": "详情",
+    "stableAttributes": {
+      "data-action": "view-order"
+    },
+    "businessScope": {
+      "meaning": "订单 A-1042 对应的列表行",
+      "candidateSelector": "tr[data-order-id=\"A-1042\"]"
+    },
+    "locatorCandidates": [
+      {
+        "engine": "playwright",
+        "strategy": "role",
+        "role": "button",
+        "name": "详情",
+        "exact": true,
+        "within": "businessScope"
+      },
+      {
+        "engine": "css",
+        "strategy": "selector",
+        "value": "[data-action=\"view-order\"]",
+        "within": "businessScope"
+      }
+    ]
+  },
+  "annotation": {
+    "name": "打开订单详情",
+    "description": "查看指定订单的详情，不修改订单数据。",
+    "allowedActions": ["open-read-only-details", "read"],
+    "preconditions": ["页面身份正确", "目标订单唯一", "按钮可见且启用"],
+    "expectedResult": "详情区打开，里面的订单号仍为 A-1042。"
+  },
+  "validation": {
+    "locatorCheck": "not-run",
+    "matchCount": null,
+    "revalidatedAfterReload": false,
+    "businessFlowVerified": false
+  },
+  "privacy": {
+    "storeInputValue": false,
+    "exportCookiesOrTokens": false,
+    "captureFullPageHtml": false
+  }
+}
