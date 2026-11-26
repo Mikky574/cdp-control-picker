@@ -96,7 +96,9 @@ def package(version, executable, build_info, output, release_version=None):
     for name, expected in build['sourceFiles'].items():
         if name not in sources or canonical_digest(name, sources[name]) != expected:
             raise RuntimeError('Build source differs from this commit: ' + name)
-    usage_name = f'docs/releases/v{version}-usage.txt'
+    usage_name = f'docs/releases/v{release_version}-usage.txt'
+    if usage_name not in sources:
+        usage_name = f'docs/releases/v{version}-usage.txt'
     if usage_name not in sources:
         raise RuntimeError('Missing release usage file: ' + usage_name)
     usage = sources[usage_name]

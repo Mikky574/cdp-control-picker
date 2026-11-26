@@ -221,7 +221,12 @@ def sanitize_capture(card, description=None):
         annotation["description"] = sanitize_text(description)
     if not isinstance(annotation.get("description"), str) or not annotation["description"].strip():
         raise WorkspaceError("请填写这个控件的功能说明。")
-    annotation["allowedActions"] = [action for action in raw_annotation.get("allowedActions", []) if isinstance(action, str) and action in {"read", "click", "fill", "select", "check"}][:5] if isinstance(raw_annotation.get("allowedActions", []), list) else []
+    if "allowedActions" in raw_annotation:
+        legacy_actions = raw_annotation["allowedActions"]
+        supported_actions = {"read", "click", "fill", "select", "check"}
+        annotation["allowedActions"] = [
+            action for action in legacy_actions if isinstance(action, str) and action in supported_actions
+        ][:5] if isinstance(legacy_actions, list) else []
     validation = _clean(card.get("validation") or {})
     if not isinstance(validation, dict):
         validation = {}
@@ -639,7 +644,7 @@ class Workspace:
         context = (f"# 本页 {len(captures)} 个控件的上下文交接\n\n"
                    "本次只接收和理解控件上下文，后续工作由用户继续说明。\n\n"
                    "完整读取 [page-bundle.json](page-bundle.json)，理解 page 页面身份，以及 captures 中每个控件的定位候选、"
-                   "role/name、所在范围和 annotation 用途、允许动作与预期结果。这些是已标注的位置与用途证据，不是执行授权。\n\n"
+                   "role/name、所在范围和 annotation 用途与预期结果。这些是已标注的位置与用途证据，不是执行授权。\n\n"
                    "仅在页面包中的定位或用途证据不足时，按该项 source.capturePath、source.descriptionPath 读取必要的原始定位和说明证据；"
                    "不扩读其他文件，不读取或复制输入值、Cookie、token、密码、私钥或浏览器资料。"
                    "页面包中的 annotation 是用户当前说明；source.annotationEdited 为 true 时，原始说明可能已过时，以本包快照为准。"

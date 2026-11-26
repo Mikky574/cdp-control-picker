@@ -88,6 +88,24 @@ class WorkspaceLearningTests(unittest.TestCase):
         self.assertNotIn('本次不连接网站', context)
         self.assertIn('学习并实际验证', bundle['shortTask'])
 
+    def test_capture_without_action_selection_keeps_selectors_in_learning_bundle(self):
+        record = self.workspace.save_capture({
+            'captureId': 'cap-new',
+            'page': {'url': self.url},
+            'control': {'tagName': 'input', 'selectors': [
+                {'strategy': 'css', 'value': '#unique-order', 'matchCount': 1},
+                {'strategy': 'css', 'value': 'input', 'matchCount': 2},
+            ]},
+            'annotation': {'name': '订单号', 'description': '填写订单号'},
+        })
+        bundle = self.export()
+        payload = json.loads(Path(bundle['bundlePath']).read_text(encoding='utf-8'))
+        captures = {entry['captureId']: entry['capture'] for entry in payload['captures']}
+        self.assertNotIn('allowedActions', self.workspace.load_capture(record['captureId'])['annotation'])
+        self.assertNotIn('allowedActions', captures['cap-new']['annotation'])
+        self.assertEqual(captures['cap-new']['control']['selectors'], record['control']['selectors'])
+        self.assertEqual(captures['cap-input']['annotation']['allowedActions'], ['read'])
+
     def test_export_keeps_original_capture_evidence_and_unverified_sequence(self):
         before = {Path(record['capturePath']): Path(record['capturePath']).read_bytes()
                   for record in self.records}

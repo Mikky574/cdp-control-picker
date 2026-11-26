@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   if (window !== window.top) return;
-  const VERSION = '1.0.0';
+  const VERSION = '1.0.1';
   if (window.__cdpControlPicker && window.__cdpControlPicker.state) {
     try {
       if (window.__cdpControlPicker.state().version === VERSION) {
@@ -196,12 +196,11 @@
     <section class="panel" role="dialog" aria-label="记录控件用途" hidden><h2>记录这个控件</h2><p class="preview"></p><form novalidate>
       <label for="picker-name">控件名称</label><input id="picker-name" name="name" maxlength="120" autocomplete="off">
       <label for="picker-description">这个位置是做什么的？ <span aria-hidden="true">*</span></label><textarea id="picker-description" name="description" maxlength="1500" required placeholder="例如：打开当前记录的只读详情"></textarea>
-      <label for="picker-action" hidden>允许的动作</label><select id="picker-action" name="action" hidden><option value="read">读取信息</option><option value="click">点击</option><option value="fill">填写</option></select>
       <label for="picker-result">预期结果</label><input id="picker-result" name="result" maxlength="500" autocomplete="off" placeholder="例如：详情中显示相同的记录编号">
       <p class="hint"></p><div class="error" role="alert" hidden></div><div class="actions"><button type="button" data-ui="cancel">取消</button><button class="primary" type="submit">保存控件卡</button></div>
     </form></section><div class="toast" role="status" aria-live="polite" hidden></div>`;
     const find = selector => shadow.querySelector(selector);
-    ui = { outline: find('.outline'), banner: find('.banner'), panel: find('.panel'), preview: find('.preview'), form: find('form'), name: find('#picker-name'), description: find('#picker-description'), action: find('#picker-action'), result: find('#picker-result'), hint: find('.hint'), error: find('.error'), toast: find('.toast') };
+    ui = { outline: find('.outline'), banner: find('.banner'), panel: find('.panel'), preview: find('.preview'), form: find('form'), name: find('#picker-name'), description: find('#picker-description'), result: find('#picker-result'), hint: find('.hint'), error: find('.error'), toast: find('.toast') };
     find('[data-ui="stop"]').addEventListener('click', disable);
     find('[data-ui="cancel"]').addEventListener('click', closeForm);
     ui.form.addEventListener('submit', saveForm);
@@ -261,7 +260,6 @@
     ui.preview.textContent = `${elementSummary.tagName} · ${elementSummary.labelHint || elementSummary.text || '无可用名称；请补充用途'}`;
     ui.name.value = compact(elementSummary.labelHint || elementSummary.text || elementSummary.tagName, 120);
     ui.description.value = '';
-    ui.action.value = 'read';
     ui.result.value = '';
     ui.error.hidden = true;
     ui.error.textContent = '';
@@ -301,7 +299,7 @@
         usedActionableAncestor: selected.clicked !== element,
         bounds: bounds(element)
       },
-      annotation: { name: compact(ui.name.value, 120) || selected.elementSummary.tagName, description: description.slice(0, 1500), allowedActions: [ui.action.value], expectedResult: ui.result.value.trim().slice(0, 500) },
+      annotation: { name: compact(ui.name.value, 120) || selected.elementSummary.tagName, description: description.slice(0, 1500), expectedResult: ui.result.value.trim().slice(0, 500) },
       validation: { status: 'draft', runtimeValidation: 'unvalidated', capturedAt: new Date().toISOString(), uniqueCandidateCount: candidates.filter(candidate => candidate.matchCount === 1).length, note: '采集唯一性不等于刷新后复用或业务动作验证；未执行点击或填写。' },
       ephemeral: { elementToken: selected.elementToken }
     };
