@@ -5,6 +5,8 @@
 /captures/
 /page-bundles/
 /.logs/
+**/.handoffs/
+**/.desktop-bridge/
 **/profile/
 **/profiles/
 **/browser-profile/
@@ -40,3 +42,10 @@ credentials*.json
 *.har
 .DS_Store
 Thumbs.db
+
+# ZCode indexes and local session databases
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.db
+*.db-*

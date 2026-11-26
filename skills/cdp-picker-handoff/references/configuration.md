@@ -1,45 +1,42 @@
-# 悬浮采集器配置
+# 采集与 app-server 配置
 
-只处理本次指定的连接与工作区。先核对实际版本：稳定 Release v0.1.0 是单卡流程；小悬浮窗与本页多控件任务包属于未发布的 v0.1.1 开发版。不要让旧版用户寻找尚未发布的“复制本页任务”按钮。
+当前适配目标为安装版 ZCode 3.16.3.8992 / 内置 CLI 0.17.0，不推断其他版本兼容。发布与真实索引、GUI、第二轮的验收状态以随包记录为准；v0.1.0 为旧面板单卡流程。
 
-## 要核对的入口
+## 核对入口
 
-| 项目 | 默认约定 | 如何理解 |
-|---|---|---|
-| CDP | `http://127.0.0.1:9222` | 本机回环浏览器控制端点，不是业务网页 URL |
-| Chrome | 已安装的 Google Chrome | 可自动发现或选实际程序；不替换浏览器、不下载安装 |
-| 固定 profile | EXE 旁 `CDP-Chrome-Profile` | 长期复用的浏览器资料，不克隆日常默认资料 |
-| 工作区 | EXE 旁 `CDP-Picker-Workspace` | `captures/`、开发版 `page-bundles/` 与草稿的位置 |
-| 日志 | `<工作区>/.logs/picker.log` | 按需读取相关片段，不常驻大日志面板 |
+| 项目 | 约定 |
+|---|---|
+| CDP | `http://127.0.0.1:9222` 是本机浏览器端点，不是业务 URL |
+| Chrome | 固定专用 Google Chrome/profile，由本人登录；复用已有端点 |
+| 默认数据 | 源码在 `.local/`；冻结 EXE 旁为 `CDP-Picker-Workspace` 与 `CDP-Chrome-Profile` |
+| ZCode | 真实安装的 `ZCode.exe` 与同包 `resources/glm/zcode.cjs` |
+| 运行方式 | Electron Node 子进程启动 app-server，stdio 协议；工作区为采集工作区 |
+| 本任务权限 | 用户明确授权 `mode=yolo` 完全访问，仅作用于采集器任务 |
+| 记录 | `.logs/picker.log` 与 `.handoffs/handoff-.../` 的 request/state/result |
 
-源码启动或自定义部署可能使用其他位置，以实际程序和参数为准。目录应可写；profile、凭据和个人运行数据不提交 Git。
+设置目前仅本次运行生效。工作区应明确且可写；不克隆日常 Chrome 默认资料，不重启共享浏览器，不导出 Cookie/token。端点可达不证明登录账号正确。
 
-设置只在本次运行生效。自定义启动可使用已有 `--endpoint <本机CDP地址>`、`--workspace <工作区绝对路径>`，通过参数数组传递；Chrome 路径在设置中选取。没有持久配置 JSON，不自行编造配置格式或声称跨重启保存。
+刷新后明确选择页签，再连接并开启采集；多页不取第一个。同页分别右键标注并保存用途、允许动作与预期结果，点击“整理本页标注（ZCode）”生成合集。分组按规范化 origin/path 或 file URL/path，忽略 query/hash；业务键仍需保留。iframe、Shadow DOM、Canvas 内部对象不在当前采集范围。
 
-## 连接与标注
+## 后台运行与权限
 
-1. 先核对端点及固定 profile。已有可用 CDP 就复用，不重启；端点可达不证明网站账号正确。
-2. 需要启动时使用采集器及已有 Chrome，不关旧浏览器、不开放公网端口、不添加通配 Origin。
-3. 人在同一个专用 Chrome 登录网站。网站身份与 Chrome 同步账号分别核对；本地资料不保证永久在线。
-4. 刷新并明确选定目标页签。刷新只更新列表；多个相似页签不默认拿第一个，也不自动连接。
-5. 连接并开启采集后，确认页面出现采集标记。在同一页签的普通主页面右键控件，填写用途、允许动作和预期结果后保存。
-6. 开发版可继续在同页右键保存多个控件，再点“复制本页任务”。这是合并已保存卡片，不是启动事件录制；单卡文件仍保留。
+主路径由 `zcode_handoff.py` 调用 `zcode_appserver.py`，参考 Plaza 的 runtime、会话 SID 保留与事件订阅结构，独立封装在本仓库。安装版 ZCode.exe 以子进程 `ELECTRON_RUN_AS_NODE=1` 运行同包 app-server，后台不依赖桌面焦点。沿用已有认证与模型，不改全局默认、全局环境或其他 Plaza 角色，不打印密钥。
 
-同页任务包按规范化页面 origin/path 或 file URL/path 分组，忽略 query/hash，targetId 只保留为来源。不同查询参数或不同业务记录仍需依卡片的业务键和用途区分，不能仅凭分组推定同一对象。
+用户已明确授权本任务使用 yolo 完全访问，可按任务使用可用工具。任务范围仍是生成能力 draft，允许必要的格式/语法检查；不据权限扩大为连接网站、执行业务、运行候选 runner 或自动安装技能。未执行的校验如实说明。
 
-## 交给 ZCode
+启动、刷新、标注不发模型任务。整理时先获得并保存真实 SID，再发送该任务并订阅事件；session/send ACK 是受理，必须等实际终态和同 SID 结果。`zcode_runner.py` 仍支持 CLI `-p` fallback，默认 mode=edit，可显式选 edit/plan/build/guarded/yolo；它不是主按钮通道。
 
-希望在已有 UI 对话中看见过程时，由用户将复制的 `shortTask` 粘贴到那个可见对话。接收方须能读取同一个本地工作区；若不在同机，交接所需资料和路径需要另行处理。
+## 索引登记
 
-悬浮窗没有实现 ZCode UI 的会话发现、绑定、打开或消息投递。CLI `-p` 是单独任务，`--cwd` 仅指定采集工作区，不保证显示在当前 UI 对话；不要把这个现象解释成“一定另用数据库”。细节见 [handoff.md](handoff.md)。
+用户选择的私有索引适配不是官方公开 API。模型请求前 `preflight()` 只读核对 ProductVersion、四表 schema、唯一约束和项目归属。索引数据基目录依次取 `ZCODE_DATA_BASE_DIR`、`HOME`、系统用户目录，相对位置 `.zcode/v2/tasks-index.sqlite`。
 
-## 排错只读必要证据
+登记前只读核实真实 CLI 会话、目录、删除状态与权限。新写入前 SQLite backup 到采集工作区 `.handoffs/index-backups/`；事务插入新 task 及必要 local 项目/root，同 SID 正确映射时幂等回读。显式 `update_owned_mode=True` 只允许本工具 owned-marker 与同 SID/taskPath 匹配的旧行修改 mode，其他列与外来任务不动。未知 schema 停止，不迁移或删库；`indexRegistered` 不代表 GUI 可见。
 
-- 先看当前状态、所选页签和最近相关日志；日志很大时只取必要的最近约 100 行，不转发完整历史。
-- 刷新失败时区分端点、非 CDP 服务、发现失败和没有普通网页，不靠重复启动解决。
-- 右键没有浮层时核对开关、实际页签、main frame 和不支持的 iframe/Shadow DOM/Canvas。页面右键处理或样式限制都要有证据，不能预设原因。
-- 登录失效由人回同一 Chrome 完成验证，不导出 Cookie/token 或换 profile。
-- 没有本页任务时先确认有已保存的同页卡片；跨页不拼包。v0.1.0 用户继续读取单卡 `task.md`。
-- 新 EXE 本轮自动启动被自动审批以 `blocked by policy` 拒绝，当前新版 UI 未验收；不要把构建产物存在当作运行成功。
+## 按阶段排错
 
-独立采集器仓库的可选源码对照：`cdp_client.py`、`browser_launcher.py`、`workspace.py`。独立技能包不含源码，不为阅读本技能另装环境。
+- CDP：区分端点、无普通页、采集开关、错误页签与不支持的 frame。
+- app-server：区分启动、绑定 SID、task 受理、事件进度、实际终态；ACK 或进程存活不等于完成。结果未知保留原 SID，不重发。
+- 索引：任务完成而登记失败时，只检查版本/schema、备份、锁和归属并补登记，不重新调用模型。
+- GUI/续聊：到对应项目核对同一个 SID；不预设刷新必然吸纳，不用新会话冒充第二轮，避免同 SID 并发轮次。
+
+个人 profile、采集、会话、日志与索引备份留本地；诊断只取本次必要片段。独立技能包不含源码，不为阅读技能安装另一套运行环境。

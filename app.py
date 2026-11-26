@@ -15,17 +15,19 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, ttk
 from urllib.parse import urlsplit
+import uuid
 
 from cdp_client import CDPClient
-from workspace import Workspace, atomic_write, safe_url, sanitize_text
+from workspace import Workspace, atomic_write, page_identity, safe_url, sanitize_text
 from browser_launcher import launch_or_reuse
 
 
 RESOURCE_DIR = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
 SCRIPT = RESOURCE_DIR / 'page_picker.js'
 ICON = RESOURCE_DIR / 'assets' / 'app-icon.ico'
-VERSION = '0.1.1'
+VERSION = '0.2.0'
 BINDING = '__cdpControlPickerSave'
+SAVE_WAIT_MESSAGE = '正在保存标注，完成后再整理。'
 
 
 def skill_source():
@@ -36,6 +38,11 @@ def skill_source():
 def default_workspace():
     parent = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).resolve().parent / '.local'
     return parent / 'CDP-Picker-Workspace'
+
+
+def default_zcode_path():
+    local = Path(os.environ.get('LOCALAPPDATA') or Path.home() / 'AppData' / 'Local')
+    return local / 'Programs' / 'ZCode' / 'ZCode.exe'
 
 
 def identity(url):
@@ -64,20 +71,30 @@ class PickerApp:
         self._refresh_selected_id=None
         self._drag_origin=None
         self._log_lock=threading.Lock()
+        self._save_lock=threading.RLock()
+        self._pending_saves={}
+        self._save_barriers={}
         self.exporting=False
+        self.sending=False
+        self._layout_specs={}
+        self._layout_jobs={}
+        self._layout_busy=set()
         self.endpoint=tk.StringVar(value=endpoint)
         self.workspace_path=tk.StringVar(value=str(workspace_path or default_workspace()))
         self.workspace_value=self.workspace_path.get()
         self.workspace_path.trace_add('write',lambda *_:setattr(self,'workspace_value',self.workspace_path.get()))
         self.page_choice=tk.StringVar(value='先刷新，再选择目标网页')
         self.chrome_path=tk.StringVar(value='')
+        self.zcode_path=tk.StringVar(value=str(default_zcode_path()))
         self.status=tk.StringVar(value='在专用 Chrome 登录网站，再刷新并选页。')
         self.capture_status=tk.StringVar(value='采集未开启')
-        self.saved_status=tk.StringVar(value='已保存 0 项 · 每项附 task.md')
+        self.saved_status=tk.StringVar(value='选页后显示本页已保存标注')
         self._build()
+        for variable in (self.status,self.saved_status):
+            variable.trace_add('write',lambda *_:self._queue_fit())
         self.root.protocol('WM_DELETE_WINDOW',self.on_close)
         self.root.after(100,self._drain)
-        self._log('小浮窗已就绪；不自动调用 ZCode 或其他模型。')
+        self._log('小浮窗已就绪；只有点击发送时才运行 ZCode 任务并登记到项目。')
         if (Path(self.workspace_value)/'captures').is_dir(): self.reload_records()
 
     def _build(self):
@@ -107,33 +124,70 @@ class PickerApp:
         heading=ttk.Label(header,text='⋮⋮  网页控件采集',font=('Microsoft YaHei UI',10,'bold'),cursor='fleur');heading.pack(side='left')
         for widget in (header,heading):
             widget.bind('<ButtonPress-1>',self._drag_start);widget.bind('<B1-Motion>',self._drag_move)
-        ttk.Button(header,text='设置',width=5,style='Small.TButton',command=self.open_settings).pack(side='right')
+        self.settings_button=ttk.Button(header,text='设置',width=5,style='Small.TButton',command=self.open_settings);self.settings_button.pack(side='right')
         tools=ttk.Frame(body);tools.grid(row=1,column=0,sticky='ew',pady=(5,0))
         self.launch_button=ttk.Button(tools,text='启动 Chrome',style='Small.TButton',command=self.launch_browser);self.launch_button.pack(side='left')
         self.refresh_button=ttk.Button(tools,text='刷新',width=5,style='Small.TButton',command=self.refresh_pages);self.refresh_button.pack(side='left',padx=(5,0))
         ttk.Button(tools,text='日志',width=5,style='Small.TButton',command=self.open_log).pack(side='right')
         ttk.Button(tools,text='记录',width=5,style='Small.TButton',command=self.open_record_folder).pack(side='right',padx=(0,5))
         self.page_combo=ttk.Combobox(body,state='readonly',textvariable=self.page_choice,width=1);self.page_combo.grid(row=2,column=0,sticky='ew',pady=(6,0))
+        self.page_combo.bind('<<ComboboxSelected>>',lambda _event:self._update_saved_status())
         actions=ttk.Frame(body);actions.grid(row=3,column=0,sticky='ew',pady=(6,0));actions.columnconfigure(0,weight=1)
         self.connect_button=ttk.Button(actions,text='连接并开启采集',style='Primary.TButton',command=self.connect_and_capture);self.connect_button.grid(row=0,column=0,sticky='ew')
         self.capture_button=self.connect_button
         self.disconnect_button=ttk.Button(actions,text='关闭',width=6,command=self.disconnect,state='disabled');self.disconnect_button.grid(row=0,column=1,padx=(6,0))
-        self.status_label=tk.Label(body,textvariable=self.status,bg='#f5f7fa',fg='#526780',font=('Microsoft YaHei UI',9),wraplength=354,justify='left',anchor='w',height=2);self.status_label.grid(row=4,column=0,sticky='ew',pady=(5,0))
-        footer=ttk.Frame(body);footer.grid(row=5,column=0,sticky='ew',pady=(1,0));footer.columnconfigure(0,weight=1)
-        ttk.Label(footer,textvariable=self.saved_status,foreground='#087b6b',font=('Microsoft YaHei UI',8),width=23).grid(row=0,column=0,sticky='w')
-        self.export_button=ttk.Button(footer,text='复制本页任务',style='Small.TButton',command=self.export_page_task);self.export_button.grid(row=0,column=1,sticky='e')
+        self.status_label=tk.Label(body,textvariable=self.status,bg='#f5f7fa',fg='#526780',font=('Microsoft YaHei UI',9),wraplength=354,justify='left',anchor='w');self.status_label.grid(row=4,column=0,sticky='ew',pady=(6,0))
+        self.saved_label=ttk.Label(body,textvariable=self.saved_status,foreground='#087b6b',font=('Microsoft YaHei UI',8),wraplength=354,justify='left',anchor='w');self.saved_label.grid(row=5,column=0,sticky='ew',pady=(4,0))
+        footer=ttk.Frame(body);footer.grid(row=6,column=0,sticky='ew',pady=(7,0));footer.columnconfigure(0,weight=1)
+        self.send_button=ttk.Button(footer,text='整理本页标注（ZCode）',style='Primary.TButton',command=self.send_page_to_zcode);self.send_button.grid(row=0,column=0,sticky='ew')
+        self.export_button=ttk.Button(footer,text='复制任务',style='Small.TButton',command=self.export_page_task);self.export_button.grid(row=0,column=1,padx=(6,0),sticky='e')
         # Kept off-layout for backend compatibility; the actual field opens in Settings.
         self.endpoint_entry=ttk.Entry(r,textvariable=self.endpoint)
-        self._fit_window(r,body,380,210)
+        self._fit_window(r,body,380,210,wraps=(self.status_label,self.saved_label))
 
-    @staticmethod
-    def _fit_window(window,body,min_width,min_height):
-        # Point-sized Windows fonts grow with DPI; fixed pixel heights clip them.
-        window.update_idletasks()
-        width=max(min_width,body.winfo_reqwidth())
-        height=max(min_height,body.winfo_reqheight())
-        window.geometry(f'{width}x{height}')
-        window.minsize(width,height)
+    def _fit_window(self,window,body,min_width,min_height,wraps=()):
+        # Fonts and native DPI metrics may settle after the first geometry pass.
+        # Refit on map/theme/configure and text changes rather than fixing pixels.
+        key=str(window)
+        self._layout_specs[key]=(window,body,min_width,min_height,tuple(wraps))
+        window.bind('<Map>',lambda event:self._queue_fit(window) if event.widget is window else None,add='+')
+        window.bind('<Configure>',lambda event:self._queue_fit(window) if event.widget is window else None,add='+')
+        body.bind('<<ThemeChanged>>',lambda _event:self._queue_fit(window),add='+')
+        self._apply_fit(key)
+        self._queue_fit(window)
+        window.after(150,lambda:self._queue_fit(window))
+
+    def _queue_fit(self,window=None):
+        window=window or self.root
+        key=str(window)
+        if self.closed or key not in self._layout_specs or key in self._layout_busy or key in self._layout_jobs:return
+        try:
+            if not window.winfo_exists():return
+            self._layout_jobs[key]=window.after_idle(lambda:self._apply_fit(key))
+        except tk.TclError:pass
+
+    def _apply_fit(self,key):
+        self._layout_jobs.pop(key,None)
+        specification=self._layout_specs.get(key)
+        if not specification or key in self._layout_busy:return
+        window,body,min_width,min_height,wraps=specification
+        self._layout_busy.add(key)
+        try:
+            if not window.winfo_exists():
+                self._layout_specs.pop(key,None);return
+            window.update_idletasks()
+            width=max(min_width,body.winfo_reqwidth())
+            padding=32 if window is not self.root else 20
+            for label in wraps:label.configure(wraplength=max(180,width-padding))
+            window.update_idletasks()
+            width=max(min_width,body.winfo_reqwidth())
+            height=max(min_height,body.winfo_reqheight())
+            window.minsize(width,height)
+            current=re.match(r'^(\d+)x(\d+)',window.geometry())
+            if not current or (int(current[1]),int(current[2]))!=(width,height):window.geometry(f'{width}x{height}')
+        except tk.TclError:
+            self._layout_specs.pop(key,None)
+        finally:self._layout_busy.discard(key)
 
     def _drag_start(self,event):
         self._drag_origin=(event.x_root-self.root.winfo_x(),event.y_root-self.root.winfo_y())
@@ -162,9 +216,20 @@ class PickerApp:
 
     def _controls(self):
         connected=bool(self.client and self.client.connected)
-        self.connect_button.configure(state='disabled' if self.connecting or self.closing or self.capture_enabled else 'normal',text='采集中 · 请在网页右键' if self.capture_enabled else '开启右键采集' if connected else '连接并开启采集')
-        self.disconnect_button.configure(state='normal' if connected and not self.connecting and not self.closing else 'disabled')
+        saving=bool(self._pending_save_count())
+        self.connect_button.configure(state='disabled' if self.connecting or self.closing or self.capture_enabled or saving else 'normal',text='采集中 · 请在网页右键' if self.capture_enabled else '开启右键采集' if connected else '连接并开启采集')
+        self.disconnect_button.configure(state='normal' if connected and not self.connecting and not self.closing and not saving else 'disabled')
         self.page_combo.configure(state='disabled' if connected or self.connecting else 'readonly')
+        self.send_button.configure(state='disabled' if self.sending or self.exporting or self.closing or saving else 'normal',text='正在交接…' if self.sending else '正在保存标注…' if saving else '整理本页标注（ZCode）')
+        self.export_button.configure(state='disabled' if self.exporting or self.sending or self.closing or saving else 'normal')
+        for widgets,disabled in ((getattr(self,'_settings_connection_controls',()),connected or self.connecting),
+                                 (getattr(self,'_settings_workspace_controls',()),connected or self.connecting or self.sending or self.exporting or saving),
+                                 (getattr(self,'_settings_zcode_controls',()),self.sending)):
+            for widget in widgets:
+                try:
+                    if widget.winfo_exists():widget.configure(state='disabled' if disabled else 'normal')
+                except tk.TclError:pass
+        self._queue_fit()
 
     def _drain(self):
         if self.closed:return
@@ -182,10 +247,12 @@ class PickerApp:
                 if retained is not None:self.page_combo.current(retained)
                 elif len(value)==1:self.page_combo.current(0)
                 else:self.page_choice.set('请选择目标网页' if value else '请先在 Chrome 中打开网站')
+                self._update_saved_status()
                 self.status.set(f'发现 {len(value)} 个网页；'+('已保留所选页。' if retained is not None else '已选中唯一网页，点击连接开始。' if len(value)==1 else '请选择目标页后连接。' if value else '登录网站后再刷新。'))
                 self._log(f'刷新发现 {len(value)} 个普通网页；没有自动连接。')
             elif kind=='connected':
                 self.current_target=value;self.current_identity=identity(value.get('url',''));self.capture_enabled=False
+                self._update_saved_status()
                 self.capture_status.set('已连接，正在检查采集层');self.status.set('已连接所选网页，正在开启采集…')
                 self.endpoint_entry.configure(state='disabled')
             elif kind=='browser-started':
@@ -201,17 +268,48 @@ class PickerApp:
             elif kind=='saved':
                 self.records[value['captureId']]=value
                 name=self._safe_text(value.get('annotation',{}).get('name') or value['captureId'],26)
-                self.saved_status.set(f'已保存 {len(self.records)} 项 · 最近：{name}');self.status.set('已保存：'+name+'。可继续右键采集。');self._log('已保存控件：'+name)
+                self._update_saved_status();self.status.set('已保存：'+name+'。可继续右键采集。');self._log('已保存控件：'+name)
+            elif kind=='save-finished':pass
+            elif kind=='page-current-url':
+                generation,url=value
+                if generation==self.connection_generation and self.current_target:
+                    self.current_target['url']=url;self._update_saved_status()
             elif kind=='page-bundle':
-                self.root.clipboard_clear();self.root.clipboard_append(value['shortTask'])
-                self.status.set(f'已合并 {value["captureCount"]} 个控件，任务已复制。请贴入 ZCode 对话。')
+                try:
+                    self.root.clipboard_clear();self.root.clipboard_append(value['shortTask'])
+                except tk.TclError as error:
+                    self.status.set(f'已合并 {value["captureCount"]} 个控件，但复制失败。请重试复制或在记录目录打开任务。')
+                    self._log('任务已导出，剪贴板复制失败：'+str(error))
+                else:
+                    self.status.set(f'已合并 {value["captureCount"]} 个控件，任务已复制。请贴入 ZCode 对话。')
                 self._log(f'已导出本页任务：{value["bundleId"]}，{value["captureCount"]} 个已标注控件。')
             elif kind=='page-export-finished':
-                self.exporting=False;self.export_button.configure(state='normal')
+                self.exporting=False;self.sending=False
+            elif kind=='handoff-bundle':
+                self.status.set(f'已合并 {value["captureCount"]} 个控件，正在运行 ZCode 任务并登记会话…')
+                self._log(f'已准备页面任务：{value["bundleId"]}，{value["captureCount"]} 个控件；等待 CLI 完成与会话索引登记。')
+            elif kind=='handoff-progress':
+                if isinstance(value,dict):
+                    message=value.get('message') or value.get('phase') or '正在交接到 ZCode…'
+                    self.status.set(self._safe_text(message,160));self._log('ZCode：'+str(message))
+            elif kind=='handoff-result':
+                registered=isinstance(value,dict) and value.get('status')=='registered' and value.get('indexRegistered') is True and isinstance(value.get('sessionId'),str) and bool(value['sessionId'].strip())
+                if registered:
+                    self.status.set('已登记到 ZCode，打开同一项目继续聊。')
+                    self._log('已完成 ZCode 任务并登记会话索引；打开同一项目继续聊。会话：'+value['sessionId'])
+                else:
+                    message=value.get('message') if isinstance(value,dict) else ''
+                    prefix='ZCode 交接未完成。' if isinstance(value,dict) and value.get('status')=='failed' else 'ZCode 会话登记尚未确认。'
+                    self.status.set(prefix+(' '+self._safe_text(message,150) if message else ' 请查看日志，不会自动重发。'))
+                    self._log(prefix+' '+str(message or '没有收到桌面对话确认，不自动重发。'))
+                if isinstance(value,dict):
+                    if value.get('requestId'):self._log('ZCode 交接请求：'+str(value['requestId']))
+                    if value.get('journalPath'):self._log('交接记录：'+str(value['journalPath']))
             elif kind=='disconnected':self._reset_connection()
             elif kind=='cdp':
                 generation,event=value
                 if generation==self.connection_generation:self._handle_cdp(event)
+                else:self._finish_pending_save(event.get('_pickerSaveToken'))
             elif kind=='connect-finished':
                 self.connecting=False;self.refresh_button.configure(state='normal')
             elif kind=='idle':self.busy=False
@@ -236,28 +334,63 @@ class PickerApp:
     def reload_records(self):
         try:
             records=self._workspace().list_captures() if (Path(self.workspace_value)/'captures').is_dir() else []
-            self.records={r['captureId']:r for r in records};self.saved_status.set(f'已保存 {len(records)} 项 · 每项附 task.md')
+            self.records={r['captureId']:r for r in records};self._update_saved_status()
         except Exception as error:self._log('读取记录失败：'+str(error));self.status.set(self._safe_text(error,130))
 
+    def _update_saved_status(self):
+        index=self.page_combo.current()
+        target=self.current_target if self.client and self.client.connected else self.pages[index] if 0<=index<len(self.pages) else None
+        try:
+            selected=page_identity(target.get('url','') if target else '')
+        except ValueError:
+            self.saved_status.set(f'共已保存 {len(self.records)} 项 · 选页后显示本页数量');return
+        count=0
+        for record in self.records.values():
+            try:
+                page=page_identity(record.get('page'))
+            except ValueError:continue
+            if (page['origin'],page['path'])==(selected['origin'],selected['path']):count+=1
+        self.saved_status.set(f'本页已保存 {count} 项 · 仅含已落盘标注')
+
     def export_page_task(self):
-        if self.exporting:return
+        self._begin_page_task(send=False)
+
+    def send_page_to_zcode(self):
+        self._begin_page_task(send=True)
+
+    def _begin_page_task(self,send=False):
+        if self.exporting or self.sending:return
+        if self._pending_save_count():
+            self.status.set(SAVE_WAIT_MESSAGE);self._controls();return
         index=self.page_combo.current()
         client=self.client if self.client and self.client.connected else None
         target=self.current_target if client else self.pages[index] if 0<=index<len(self.pages) else None
         if not target:
             self.status.set('请先选中要合并控件的页面。');return
         page_url=target.get('url','')
-        self.exporting=True;self.export_button.configure(state='disabled')
+        desktop_path=self.zcode_path.get().strip() or None
+        generation=self.connection_generation
+        self.exporting=True;self.sending=bool(send);self._controls()
         self.status.set('正在合并本页已标注的控件…')
         def export():
             try:
                 current_url=page_url
+                workspace=self._workspace()
                 if client:
-                    response=client.call('Runtime.evaluate',{'expression':'location.href','returnByValue':True})
-                    current_url=response.get('result',{}).get('value')
-                    if response.get('exceptionDetails') or not isinstance(current_url,str):
-                        raise RuntimeError('未能确认当前页面，请刷新选页后再导出。')
-                self.events.put(('page-bundle',self._workspace().export_page_bundle(current_url)))
+                    current_url=self._saved_page_barrier(client,generation)
+                # The barrier defines this explicit task's capture boundary.
+                # Do not hold the callback lock during file IO on this worker.
+                if self._pending_save_count():raise RuntimeError(SAVE_WAIT_MESSAGE)
+                bundle=workspace.export_page_bundle(current_url)
+                if send:
+                    self.events.put(('handoff-bundle',bundle))
+                    # Import lazily: startup/copy never starts the CLI or calls
+                    # a model. The adapter confirms durable session indexing.
+                    from zcode_handoff import ZCodeHandoff
+                    result=ZCodeHandoff(workspace,commandPath=desktop_path).send(
+                        bundle,on_event=lambda event:self.events.put(('handoff-progress',event)))
+                    self.events.put(('handoff-result',result))
+                else:self.events.put(('page-bundle',bundle))
             finally:self.events.put(('page-export-finished',None))
         self._background(export)
 
@@ -280,7 +413,7 @@ class PickerApp:
 
     def open_settings(self):
         if self.settings_window and self.settings_window.winfo_exists():self.settings_window.lift();return
-        w=tk.Toplevel(self.root);self.settings_window=w;w.title('连接与保存设置');w.geometry('570x285');w.resizable(False,False);w.transient(self.root);w.attributes('-topmost',True)
+        w=tk.Toplevel(self.root);self.settings_window=w;w.title('连接与交接设置');w.resizable(False,False);w.transient(self.root);w.attributes('-topmost',True)
         body=ttk.Frame(w,padding=16);body.pack(fill='both',expand=True);body.columnconfigure(1,weight=1)
         ttk.Label(body,text='CDP 地址').grid(row=0,column=0,sticky='w',padx=(0,12))
         ep=ttk.Entry(body,textvariable=self.endpoint);ep.grid(row=0,column=1,columnspan=2,sticky='ew')
@@ -290,21 +423,34 @@ class PickerApp:
         ttk.Label(body,text='Chrome 路径').grid(row=2,column=0,sticky='w',pady=(12,0))
         chrome=ttk.Entry(body,textvariable=self.chrome_path);chrome.grid(row=2,column=1,sticky='ew',pady=(12,0))
         browse_chrome=ttk.Button(body,text='选择',width=5,command=self.choose_chrome);browse_chrome.grid(row=2,column=2,padx=(8,0),pady=(12,0))
-        ttk.Label(body,text='Chrome 路径留空可自动寻找。连接期间请先关闭采集再改设置。\n配置和 AI 交接按配套 skill；每条记录附 task.md。\n本窗口不运行 ZCode 或其他模型。',foreground='#5a6b83',wraplength=520).grid(row=3,column=0,columnspan=3,sticky='w',pady=(15,12))
+        ttk.Label(body,text='ZCode 程序').grid(row=3,column=0,sticky='w',pady=(12,0))
+        zcode=ttk.Entry(body,textvariable=self.zcode_path);zcode.grid(row=3,column=1,sticky='ew',pady=(12,0))
+        browse_zcode=ttk.Button(body,text='选择',width=5,command=self.choose_zcode);browse_zcode.grid(row=3,column=2,padx=(8,0),pady=(12,0))
+        hint=ttk.Label(body,text='发送会把本页已标注控件合并，并复用上方记录目录作为 ZCode 工作区。\n任务权限：完全访问。后台任务完成并登记会话后，打开同一项目继续聊。\nChrome 路径留空可自动寻找；连接期间不能更改浏览器入口和记录目录。',foreground='#5a6b83',wraplength=520,justify='left');hint.grid(row=4,column=0,columnspan=3,sticky='ew',pady=(15,12))
         def done():
             if not self.workspace_value.strip():self.status.set('记录目录不能为空。');return
             self.reload_records();self._log('已应用本次设置。');w.destroy()
-        ttk.Button(body,text='完成',command=done).grid(row=4,column=2,sticky='e')
-        if self.connecting or (self.client and self.client.connected):
-            for control in (ep,folder,browse,chrome,browse_chrome):control.configure(state='disabled')
-        self._fit_window(w,body,570,285)
+        self.settings_done_button=ttk.Button(body,text='完成',command=done);self.settings_done_button.grid(row=5,column=2,sticky='e')
+        self._settings_connection_controls=(ep,chrome,browse_chrome)
+        self._settings_workspace_controls=(folder,browse)
+        self._settings_zcode_controls=(zcode,browse_zcode)
+        self._controls()
+        self._fit_window(w,body,570,285,wraps=(hint,))
+
+    def choose_zcode(self):
+        filename=filedialog.askopenfilename(title='选择 ZCode 桌面程序',initialfile='ZCode.exe',filetypes=[('ZCode 桌面程序','*.exe'),('所有文件','*.*')],parent=self.settings_window or self.root)
+        if filename:
+            self.zcode_path.set(filename)
+            self._log('已选择 ZCode 桌面程序；将在点击发送时使用。')
 
     def _reset_connection(self):
         self.capture_enabled=False;self.current_target=None;self.current_identity=None
         self.capture_status.set('采集未开启');self.status.set('已关闭采集；Chrome 与标签页保持原样。');self.endpoint_entry.configure(state='normal');self._controls()
 
     def on_close(self):
+        if self.sending:self.status.set('正在交接到 ZCode，请等待登记结果后再退出。');return
         if self.connecting:self.status.set('正在连接，请结束后再关闭浮窗。');return
+        if self._pending_save_count():self.status.set('正在保存标注，请完成后再退出。');return
         if self.closed or self.closing:return
         self.closing=True
         self.status.set('正在停止采集并退出；Chrome 将保留。')
@@ -326,26 +472,80 @@ class PickerApp:
         threading.Thread(target=run, daemon=True).start()
 
 
-    def _event(self, event):
-        self.events.put(('cdp', (self.connection_generation, event)))
+    def _pending_save_count(self):
+        with self._save_lock:return len(self._pending_saves)
+
+    def _finish_pending_save(self, token):
+        if not token:return
+        with self._save_lock:removed=self._pending_saves.pop(token,None) is not None
+        if removed:self.events.put(('save-finished',None))
+
+    def _event(self, event, generation=None):
+        generation=self.connection_generation if generation is None else generation
+        if generation!=self.connection_generation:return
+        params=event.get('params') or {}
+        if event.get('method')=='Runtime.bindingCalled' and params.get('name')==BINDING:
+            payload=params.get('payload','')
+            if isinstance(payload,str) and len(payload)<=100000:
+                try:message=json.loads(payload)
+                except ValueError:message=None
+                if isinstance(message,dict) and '_pickerHostBarrier' in message:
+                    nonce=message['_pickerHostBarrier']
+                    with self._save_lock:barrier=self._save_barriers.get((generation,nonce)) if isinstance(nonce,str) else None
+                    if barrier:barrier.set()
+                    return
+                token=uuid.uuid4().hex
+                with self._save_lock:self._pending_saves[token]=generation
+                event={**event,'_pickerSaveToken':token}
+        self.events.put(('cdp',(generation,event)))
+
+    def _saved_page_barrier(self,client,generation):
+        """Wait off the Tk thread until preceding save callbacks are admitted."""
+        nonce=uuid.uuid4().hex
+        barrier=threading.Event()
+        with self._save_lock:self._save_barriers[(generation,nonce)]=barrier
+        try:
+            expression="(() => { if (window !== window.top || typeof window.__cdpControlPickerSave !== 'function') return null; window.__cdpControlPickerSave(JSON.stringify({_pickerHostBarrier:"+json.dumps(nonce)+"})); return location.href; })()"
+            response=client.call('Runtime.evaluate',{'expression':expression,'returnByValue':True})
+            url=response.get('result',{}).get('value')
+            if response.get('exceptionDetails') or not isinstance(url,str):
+                raise RuntimeError('未能确认保存通道和当前页面，请重新连接后再整理。')
+            if not barrier.wait(10):
+                raise RuntimeError('尚未确认此前标注的保存通知，请稍后重试整理。')
+            if client is not self.client or generation!=self.connection_generation:
+                raise RuntimeError('页面连接已变化，请重新选页后整理。')
+            if self._pending_save_count():raise RuntimeError(SAVE_WAIT_MESSAGE)
+            self.events.put(('page-current-url',(generation,url)))
+            return url
+        finally:
+            with self._save_lock:self._save_barriers.pop((generation,nonce),None)
 
 
     def _handle_cdp(self, event):
         method = event.get('method')
         params = event.get('params') or {}
         if method == 'Runtime.bindingCalled' and params.get('name') == BINDING:
+            token=event.get('_pickerSaveToken')
             if not self.capture_enabled or not self.client or not self.client.connected:
+                self._finish_pending_save(token)
                 return
             payload = params.get('payload', '')
             if not isinstance(payload, str) or len(payload) > 100000:
                 self._log('忽略无效采集资料。')
+                self._finish_pending_save(token)
                 return
-            self._background(lambda: self._save_binding(payload, params.get('executionContextId')))
+            self.status.set(SAVE_WAIT_MESSAGE)
+            def save():
+                try:self._save_binding(payload,params.get('executionContextId'))
+                finally:self._finish_pending_save(token)
+            self._background(save)
         elif method == 'CDP.disconnected' and not params.get('intentional'):
             self._log('浏览器连接已断开：' + str(params.get('reason', '')))
             self._reset_connection()
         elif method == 'Page.frameNavigated':
             frame = params.get('frame') or {}
+            if not frame.get('parentId') and frame.get('url') and self.current_target:
+                self.current_target['url']=frame['url'];self._update_saved_status()
             if not frame.get('parentId') and frame.get('url') and self.current_identity:
                 if identity(frame['url']) != self.current_identity and self.capture_enabled:
                     self._log('页面身份已变化，暂停采集；核对新页面后可重新开启。')
@@ -404,7 +604,7 @@ class PickerApp:
         def connect():
             try:
                 self._disconnect_now()
-                client = CDPClient(endpoint, lambda event: self.events.put(('cdp', (generation, event))))
+                client = CDPClient(endpoint, lambda event:self._event(event,generation))
                 client.connect(target)
                 try:
                     client.call('Runtime.enable')
@@ -543,7 +743,7 @@ def main():
     args = parser.parse_args()
     if args.package_check:
         import websocket
-        report = {'version': VERSION, 'uiMode': 'floating', 'defaultWindowSize': [380, 210], 'automaticModelCalls': False, 'zcodeRunnerImported': 'zcode_runner' in sys.modules, 'pickerScriptExists': SCRIPT.is_file(), 'bundledSkillExists': (skill_source() / 'SKILL.md').is_file(), 'iconExists': ICON.is_file(), 'tkVersion': tk.TkVersion, 'websocketVersion': websocket.__version__, 'openedWindow': False, 'connectedBrowser': False}
+        report = {'version': VERSION, 'uiMode': 'floating', 'defaultWindowSize': [380, 210], 'automaticModelCalls': False, 'handoffBackend': 'app-server-with-desktop-index', 'permissionMode': 'yolo', 'permissionLabel': '完全访问', 'zcodeRunnerImported': 'zcode_runner' in sys.modules, 'pickerScriptExists': SCRIPT.is_file(), 'bundledSkillExists': (skill_source() / 'SKILL.md').is_file(), 'iconExists': ICON.is_file(), 'tkVersion': tk.TkVersion, 'websocketVersion': websocket.__version__, 'openedWindow': False, 'connectedBrowser': False}
         args.package_check.parent.mkdir(parents=True, exist_ok=True)
         args.package_check.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
         return
@@ -551,7 +751,7 @@ def main():
         try:
             import ctypes
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('AIConnectionKnowledge.CDPControlPicker')
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('CDPControlPicker.Desktop')
         except Exception:
             pass
     root = tk.Tk()

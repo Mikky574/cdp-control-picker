@@ -116,6 +116,19 @@ class OfflineTests(unittest.TestCase):
         self.assertTrue(outputs)
         self.assertEqual(json.loads(Path(state["runPath"]).read_text(encoding="utf-8"))["status"], "completed")
 
+    def test_single_card_fake_cli_uses_explicit_yolo_without_changing_default(self):
+        workspace, record = self.make_task()
+        received = self.base / "yolo-argv.json"
+        command = self.fake_cli("pathlib.Path(" + repr(str(received)) + ").write_text(json.dumps(sys.argv[1:]),encoding='utf-8')\nprint(json.dumps({'sessionId':'sess_yolo','response':'draft ready'}))\n")
+        runner = ZCodeRunner(command, workspace.root, mode="yolo")
+        state = runner.wait(runner.start(record["taskPath"]), 10)
+        self.assertEqual(state["status"], "completed")
+        args = json.loads(received.read_text(encoding="utf-8"))
+        self.assertEqual(args[args.index("--mode") + 1], "yolo")
+        self.assertEqual(state["mode"], "yolo")
+        self.assertEqual(json.loads(Path(state["runPath"]).read_text(encoding="utf-8"))["mode"], "yolo")
+        self.assertEqual(ZCodeRunner(command, workspace.root).mode, "edit")
+
     def test_nonzero_and_unconfirmed_exit_are_distinct(self):
         workspace, record = self.make_task()
         failed = ZCodeRunner(self.fake_cli("print('api_key=example-sensitive-key',file=sys.stderr)\nsys.exit(7)\n"), workspace.root)
