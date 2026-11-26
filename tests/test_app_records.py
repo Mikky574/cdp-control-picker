@@ -267,6 +267,11 @@ class HiddenTkRecordTests(unittest.TestCase):
         self.root = app.tk.Tk()
         self.root.withdraw()
         self.picker = app.PickerApp(self.root, workspace_path=Path(self.temporary.name))
+        # Allocate real child widths without mapping the withdrawn host.
+        body = self.picker._layout_specs[str(self.root)][1]
+        body.pack_forget()
+        body.place(x=0, y=0, width=self.picker.palette_width,
+                   height=self.root.winfo_screenheight())
         self.workspace = self.picker._workspace()
         self.page = 'https://example.test/orders'
         for capture_id, name in (('cap-first', '编号'), ('cap-second', '查询')):
@@ -312,7 +317,8 @@ class HiddenTkRecordTests(unittest.TestCase):
             return window
 
         with patch.object(app.tk, 'Toplevel', side_effect=hidden):
-            self.picker.edit_selected_record()
+            capture_id = self.picker._selected_record()['captureId']
+            self.picker.record_list.cards[capture_id]['buttons']['edit'].invoke()
         self.root.update_idletasks()
         return self.picker.editor_window
 
@@ -349,13 +355,16 @@ class HiddenTkRecordTests(unittest.TestCase):
         self.assertEqual(after['annotation']['preconditions'], '必须登录')
         self.assertEqual(after['control'], before['control'])
         self.assertEqual(after['page'], before['page'])
+        self.assertEqual(after['annotation']['allowedActions'], before['annotation']['allowedActions'])
+        self.root.update_idletasks()
+        self.assertEqual(picker.record_list.cards['cap-first']['titleText'], '订单编号')
         self.assertIn('订单编号', picker.record_list.cards['cap-first']['title'].cget('text'))
         with patch.object(app.messagebox, 'askyesno', return_value=True):
-            picker.delete_selected_record()
+            picker.record_list.cards['cap-first']['menu'].invoke(3)
         self.assertEqual(tuple(picker.record_list.cards), ('cap-second',))
         self.assertEqual(Path(bundle['bundlePath']).read_bytes(), snapshot)
 
-    def test_native_order_buttons_freeze_and_expand_collapse_layout(self):
+    def test_native_order_menu_freeze_and_expand_collapse_layout(self):
         picker = self.picker
         body = next(widget for widget in self.root.winfo_children() if isinstance(widget, app.ttk.Frame))
         picker._apply_fit(str(self.root))
@@ -368,7 +377,7 @@ class HiddenTkRecordTests(unittest.TestCase):
         picker.toggle_records()
         picker.record_list.select('cap-second')
         picker._record_selection_changed()
-        picker.record_list.cards['cap-second']['buttons']['up'].invoke()
+        picker.record_list.cards['cap-second']['menu'].invoke(0)
         self.assertEqual(tuple(picker.record_list.cards), ('cap-second', 'cap-first'))
         self.assertTrue(picker.sequence_ordered.get())
         for state in ('sending', 'exporting', 'pending_count'):
@@ -380,7 +389,10 @@ class HiddenTkRecordTests(unittest.TestCase):
             picker._controls()
             for widget in (list(picker.record_list.cards['cap-first']['buttons'].values())
                            + [picker.sequence_check]):
-                self.assertTrue(widget.instate(('disabled',)))
+                self.assertEqual(str(widget.cget('state')), 'disabled')
+            for index in (0, 1, 3):
+                self.assertEqual(str(picker.record_list.cards['cap-first']['menu'].entrycget(index, 'state')),
+                                 'disabled')
             if state == 'pending_count':
                 picker._pending_save_count = previous_pending
             else:
@@ -417,6 +429,51 @@ class HiddenTkRecordTests(unittest.TestCase):
         pending = set(self.root.tk.splitlist(self.root.tk.call('after', 'info')))
         self.assertFalse(owned & pending)
 
+    def test_native_send_feedback_remains_visible_and_stops_its_progress_timer(self):
+        picker = self.picker
+        clock = [100.0]
+        picker.send_feedback = app.SendFeedback(clock=lambda: clock[0])
+        picker._feedback_workspace = str(self.workspace.root)
+        revision = picker._page_revision()
+        picker.send_feedback.select(revision)
+        self.assertTrue(picker.send_feedback.begin(revision))
+        picker.sending = True
+        picker._controls()
+        self.root.update_idletasks()
+        timer = picker._send_timer_job
+        self.assertIsNotNone(timer)
+        self.assertTrue(picker._send_progress_running)
+        self.assertTrue(picker.send_button.instate(('disabled',)))
+        self.assertEqual(str(picker.page_combo.cget('state')), 'disabled')
+        clock[0] += 5
+        # Simulate Tcl consuming this callback before it invokes the handler.
+        self.root.after_cancel(timer)
+        picker._tick_send_feedback()
+        self.assertEqual(picker.send_time.get(), '5 秒')
+        picker.send_feedback.complete({'status': 'registered', 'indexRegistered': True,
+                                       'sessionId': 'sess_native_fixture',
+                                       'responseSummary': '已收到两个控件，等待说明。'})
+        picker.sending = False
+        picker._controls()
+        self.root.update_idletasks()
+        self.assertEqual(picker.send_title.get(), '发送完成')
+        self.assertTrue(picker.send_button.instate(('disabled',)))
+        self.assertEqual(picker.send_button.cget('text'), '本页已发送')
+        self.assertFalse(picker._send_progress_running)
+        self.assertIsNone(picker._send_timer_job)
+        self.assertEqual(picker.send_progress.winfo_manager(), '')
+        picker.status.set('Chrome 已刷新，此消息只属于浏览器状态。')
+        self.root.update_idletasks()
+        self.assertEqual(picker.send_title.get(), '发送完成')
+        with patch.object(app.messagebox, 'showinfo') as dialog:
+            picker.open_send_receipt()
+        self.assertIn('已收到两个控件', dialog.call_args.args[1])
+        picker._store_record_annotation('cap-first', {'name': '新名称', 'description': '新的用途'})
+        self.assertTrue(picker.send_feedback.can_send(picker._page_revision()))
+        self.assertFalse(picker.send_button.instate(('disabled',)))
+        self.assertFalse(picker.send_feedback.can_send(revision))
+        self.assertEqual(self.root.state(), 'withdrawn')
+
 
 class HiddenTkPaletteDpiTests(unittest.TestCase):
     def test_main_palette_tools_and_height_at_five_dpi_scales(self):
@@ -449,24 +506,34 @@ class HiddenTkPaletteDpiTests(unittest.TestCase):
                     root.update_idletasks()
                     self.assertEqual(root.state(), 'withdrawn')
                     self.assertEqual(tuple(picker.record_list.cards), ('cap-long', 'cap-next'))
-                    toolbar = body.grid_slaves(row=2, column=0)[0]
-                    buttons = [picker.launch_button, picker.refresh_button,
-                               picker.connect_button, picker.disconnect_button]
-                    boxes = []
-                    for button in buttons:
-                        x = button.winfo_rootx() - toolbar.winfo_rootx()
-                        y = button.winfo_rooty() - toolbar.winfo_rooty()
-                        box = (x, y, x + button.winfo_width(), y + button.winfo_height())
-                        self.assertGreater(button.winfo_width(), 1)
-                        self.assertGreaterEqual(box[0], 0)
-                        self.assertLessEqual(box[2], toolbar.winfo_width())
-                        boxes.append(box)
-                    for index, left in enumerate(boxes):
-                        for right in boxes[index + 1:]:
-                            overlap = (min(left[2], right[2]) > max(left[0], right[0])
-                                       and min(left[3], right[3]) > max(left[1], right[1]))
-                            self.assertFalse(overlap, boxes)
-                    self.assertLessEqual(toolbar.winfo_rootx() - body.winfo_rootx() + toolbar.winfo_width(), body.winfo_width())
+                    toolbar = picker.launch_button.master
+                    actions = picker.connect_button.master
+                    top_buttons = [widget for widget in toolbar.winfo_children()
+                                   if isinstance(widget, app.ttk.Button)]
+                    top_buttons.sort(key=lambda widget: widget.winfo_x())
+                    self.assertEqual([button.cget('text') for button in top_buttons],
+                                     ['启动 Chrome', '刷新', '记录', '日志'])
+                    self.assertLess(toolbar.winfo_rooty(), picker.page_combo.winfo_rooty())
+                    self.assertLess(picker.page_combo.winfo_rooty(), actions.winfo_rooty())
+                    for row, buttons in ((toolbar, top_buttons),
+                                         (actions, [picker.connect_button, picker.disconnect_button])):
+                        boxes = []
+                        for button in buttons:
+                            x = button.winfo_rootx() - row.winfo_rootx()
+                            y = button.winfo_rooty() - row.winfo_rooty()
+                            box = (x, y, x + button.winfo_width(), y + button.winfo_height())
+                            self.assertGreater(button.winfo_width(), 1)
+                            self.assertGreaterEqual(box[0], 0)
+                            self.assertGreaterEqual(box[1], 0)
+                            self.assertLessEqual(box[2], row.winfo_width())
+                            self.assertLessEqual(box[3], row.winfo_height())
+                            boxes.append(box)
+                        for index, left in enumerate(boxes):
+                            for right in boxes[index + 1:]:
+                                overlap = (min(left[2], right[2]) > max(left[0], right[0])
+                                           and min(left[3], right[3]) > max(left[1], right[1]))
+                                self.assertFalse(overlap, boxes)
+                        self.assertLessEqual(row.winfo_rootx() - body.winfo_rootx() + row.winfo_width(), body.winfo_width())
                     expanded_height = body.winfo_reqheight()
                     safe_height = root.winfo_screenheight() - picker._dip(90)
                     self.assertLessEqual(expanded_height, safe_height)

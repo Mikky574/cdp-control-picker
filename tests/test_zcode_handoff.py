@@ -6,10 +6,12 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from workspace import Workspace
-from zcode_handoff import HandoffError, ZCodeHandoff, workspace_lock
+from zcode_handoff import (HandoffError, ZCodeHandoff, inspect_handoff, read_handoff,
+                           workspace_lock, _response_summary)
 
 
 class FakeIndex:
@@ -56,7 +58,12 @@ class FakeServer:
             raise TimeoutError('fixture native turn timed out')
         if self.result.get('status') != 'completed':
             raise ValueError('fixture native failure or unconfirmed result')
-        return {'session': {'sessionId': self.result.get('sessionId')}, 'messages': [],
+        messages = self.result.get('messages', [
+            {'info': {'role': 'user', 'sessionId': session_id},
+             'parts': [{'type': 'text', 'text': content, 'sessionId': session_id}]},
+            {'info': {'role': 'assistant', 'sessionId': session_id},
+             'parts': [{'type': 'text', 'text': self.result.get('response', ''), 'sessionId': session_id}]}])
+        return {'session': {'sessionId': self.result.get('sessionId')}, 'messages': messages,
                 'settings': {'permission': {'mode': 'yolo'}}}
 
 
@@ -71,7 +78,7 @@ class BackgroundHandoffTests(unittest.TestCase):
                 'annotation': {'description': label, 'allowedActions': ['read']}})
         self.bundle = self.workspace.export_page_bundle('https://example.test/orders')
         self.index = FakeIndex()
-        self.server = FakeServer({'status': 'completed', 'sessionId': 'sess-fixture', 'response': 'draft ready'})
+        self.server = FakeServer({'status': 'completed', 'sessionId': 'sess-fixture', 'response': '已收到本页两个控件的上下文，等待补充。'})
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -136,6 +143,154 @@ class BackgroundHandoffTests(unittest.TestCase):
         self.assertEqual(first['sessionId'], second['sessionId'])
         self.assertTrue(second['duplicate'])
         self.assertEqual(len(self.server.calls), 1)
+
+    def test_read_only_inspection_needs_no_cli_index_or_file_creation(self):
+        before = {str(path.relative_to(self.root)): path.read_bytes()
+                  for path in self.root.rglob('*') if path.is_file()}
+        with patch('zcode_handoff.resolve_command', side_effect=AssertionError('No CLI discovery')):
+            view = inspect_handoff(self.workspace, self.bundle)
+            self.assertIsNone(read_handoff(self.root, 'handoff-' + '0' * 20))
+        self.assertTrue(view['canSubmit'])
+        self.assertFalse(view['duplicate'])
+        self.assertFalse(view['canRegister'])
+        self.assertIsNone(view['previous'])
+        self.assertEqual(view['captureCount'], 2)
+        self.assertFalse((self.root / '.handoffs').exists())
+        self.assertEqual(before, {str(path.relative_to(self.root)): path.read_bytes()
+                                  for path in self.root.rglob('*') if path.is_file()})
+        self.assertEqual(self.index.preflights, 0)
+        self.assertEqual(self.index.calls, [])
+        self.assertEqual(self.server.calls, [])
+
+    def test_registered_duplicate_returns_original_summary_without_model_or_index_write(self):
+        first = self.handoff().send(self.bundle)
+        state_path = Path(first['journalPath']) / 'state.json'
+        before = state_path.read_bytes()
+        events = []
+        second = self.handoff().send(self.bundle, events.append)
+        self.assertTrue(second['duplicate'])
+        self.assertIn('未重复提交', second['message'])
+        self.assertEqual(second['responseSummary'], first['responseSummary'])
+        self.assertEqual(second['requestId'], first['requestId'])
+        self.assertEqual(self.server.bindings, [None])
+        self.assertEqual(len(self.server.calls), 1)
+        self.assertEqual(len(self.index.calls), 1)
+        self.assertEqual(state_path.read_bytes(), before)
+        self.assertEqual([event['phase'] for event in events], ['already_sent'])
+        with patch('zcode_handoff.resolve_command', side_effect=AssertionError('No CLI discovery')):
+            view = inspect_handoff(self.root, self.workspace.export_page_bundle('https://example.test/orders'))
+            receipt = read_handoff(self.root, first['requestId'])
+        self.assertFalse(view['canSubmit'])
+        self.assertTrue(view['duplicate'])
+        self.assertEqual(view['previous']['sessionId'], 'sess-fixture')
+        self.assertEqual(receipt['responseSummary'], first['responseSummary'])
+        self.assertNotIn('indexReceipt', receipt)
+        self.assertNotIn('binding', receipt)
+
+    def test_inspection_keeps_unknown_blocked_and_index_retry_distinct(self):
+        self.server.result = None
+        failed = self.handoff().send(self.bundle)
+        view = inspect_handoff(self.root, self.bundle)
+        self.assertEqual(view['previous']['status'], 'unknown')
+        self.assertFalse(view['canSubmit'])
+        self.assertFalse(view['canRegister'])
+        self.assertTrue(view['duplicate'])
+        self.assertEqual(view['previous']['requestId'], failed['requestId'])
+        self.assertEqual(len(self.server.calls), 1)
+        # A different content identity gets an independent, fake-only task.
+        payload_path = Path(self.bundle['bundlePath'])
+        payload = json.loads(payload_path.read_text(encoding='utf-8'))
+        payload['captures'][0]['capture']['annotation']['description'] += ' changed'
+        payload_path.write_text(json.dumps(payload), encoding='utf-8')
+        self.server.result = {'status': 'completed', 'sessionId': 'sess-fixture', 'response': '已收到'}
+        self.index.failure = True
+        first = self.handoff().send(self.bundle)
+        view = inspect_handoff(self.root, self.bundle)
+        self.assertEqual(view['previous']['status'], 'index_failed')
+        self.assertTrue(view['canRegister'])
+        self.assertFalse(view['canSubmit'])
+        self.assertEqual(view['previous']['sessionId'], first['sessionId'])
+        self.assertEqual(len(self.server.calls), 2)
+
+    def test_inspection_reports_latest_pre_submit_failure_by_time_not_random_id(self):
+        fingerprint = inspect_handoff(self.root, self.bundle)['fingerprint']
+        for suffix, created in (('f' * 20, '2026-01-01T00:00:00+00:00'),
+                                ('a' * 20, '2026-01-02T00:00:00+00:00')):
+            directory = self.root / '.handoffs' / ('handoff-' + suffix)
+            directory.mkdir(parents=True)
+            state = {'requestId': directory.name, 'fingerprint': fingerprint,
+                     'status': 'failed', 'submissionAttempted': False, 'createdAt': created,
+                     'error': 'not admitted', 'privatePrompt': 'PRIVATE_FIXTURE_MUST_NOT_RETURN'}
+            (directory / 'state.json').write_text(json.dumps(state), encoding='utf-8')
+        view = inspect_handoff(self.root, self.bundle)
+        self.assertTrue(view['canSubmit'])
+        self.assertFalse(view['duplicate'])
+        self.assertEqual(view['previous']['requestId'], 'handoff-' + 'a' * 20)
+        self.assertNotIn('PRIVATE_FIXTURE_MUST_NOT_RETURN', json.dumps(view))
+        with self.assertRaises(HandoffError):
+            read_handoff(self.root, '../outside')
+
+    def test_inspection_prioritizes_real_blocking_receipt_over_newer_pre_submit_failure(self):
+        fingerprint = inspect_handoff(self.root, self.bundle)['fingerprint']
+        old_id, new_id = 'handoff-' + 'f' * 20, 'handoff-' + 'a' * 20
+        old_directory = self.root / '.handoffs' / old_id
+        new_directory = self.root / '.handoffs' / new_id
+        old_directory.mkdir(parents=True)
+        new_directory.mkdir()
+        (new_directory / 'state.json').write_text(json.dumps({
+            'requestId': new_id, 'fingerprint': fingerprint, 'status': 'failed',
+            'submissionAttempted': False, 'createdAt': '2026-01-02T00:00:00+00:00'}), encoding='utf-8')
+        for status in ('registered', 'unknown'):
+            with self.subTest(blocking_status=status):
+                (old_directory / 'state.json').write_text(json.dumps({
+                    'requestId': old_id, 'fingerprint': fingerprint, 'status': status,
+                    'submissionAttempted': True, 'sessionId': 'sess-original',
+                    'indexRegistered': status == 'registered', 'responseSummary': '之前的原会话回执',
+                    'createdAt': '2026-01-01T00:00:00+00:00'}), encoding='utf-8')
+                view = inspect_handoff(self.root, self.bundle)
+                self.assertFalse(view['canSubmit'])
+                self.assertTrue(view['duplicate'])
+                self.assertEqual(view['previous']['requestId'], old_id)
+                self.assertEqual(view['previous']['sessionId'], 'sess-original')
+                self.assertEqual(view['previous']['status'], status)
+                self.assertEqual(view['previous']['responseSummary'], '之前的原会话回执')
+        self.assertEqual(self.server.calls, [])
+        self.assertEqual(self.index.calls, [])
+        self.assertEqual(self.index.preflights, 0)
+
+    def test_summary_only_uses_native_public_assistant_text_and_is_persisted_bounded(self):
+        public = '已收到本页两个控件的位置与用途，等待后续补充。' * 40
+        self.server.result['messages'] = [
+            {'info': {'role': 'user', 'sessionId': 'sess-fixture'}, 'parts': [{'type': 'text', 'text': 'fixture context'}]},
+            {'info': {'role': 'assistant', 'sessionId': 'sess-fixture'}, 'parts': [
+                {'type': 'reasoning', 'text': 'PRIVATE_REASONING'},
+                {'type': 'tool', 'state': {'output': 'PRIVATE_TOOL_OUTPUT'}},
+                {'type': 'text', 'text': 'PRIVATE_SYNTHETIC', 'synthetic': True},
+                {'type': 'text', 'text': 'PRIVATE_IGNORED', 'ignored': True},
+                {'type': 'text', 'text': 'PRIVATE_HIDDEN', 'metadata': {'zcode': {'visibility': 'model-only'}}},
+                {'type': 'text', 'text': public, 'sessionId': 'sess-fixture'}]}]
+        state = self.handoff().send(self.bundle)
+        summary = state['responseSummary']
+        self.assertEqual(summary, public[:500])
+        self.assertLessEqual(len(summary), 500)
+        self.assertNotIn('PRIVATE_', summary)
+        directory = Path(state['journalPath'])
+        for name in ('state.json', 'result.json'):
+            saved = json.loads((directory / name).read_text(encoding='utf-8'))
+            self.assertEqual(saved['responseSummary'], summary)
+            self.assertNotIn('PRIVATE_', json.dumps(saved))
+
+    def test_summary_does_not_treat_flat_cli_response_or_historical_text_as_native_reply(self):
+        self.assertEqual(_response_summary({'response': 'PRIVATE_CLI', 'messages': [
+            {'role': 'assistant', 'content': 'PRIVATE_UNTYPED'}]}, 'sess-fixture'), '')
+        self.assertEqual(_response_summary({'messages': [
+            {'info': {'role': 'assistant', 'sessionId': 'sess-fixture'},
+             'parts': [{'type': 'text', 'text': 'OLD_REPLY'}]},
+            {'info': {'role': 'user', 'sessionId': 'sess-fixture'},
+             'parts': [{'type': 'text', 'text': 'NEW_REQUEST'}]}]}, 'sess-fixture'), '')
+        self.assertEqual(_response_summary({'messages': [
+            {'info': {'role': 'assistant', 'sessionId': 'sess-other'},
+             'parts': [{'type': 'text', 'text': 'WRONG_SESSION'}]}]}, 'sess-fixture'), '')
 
     def test_legacy_fingerprint_is_unchanged_without_sequence_field(self):
         payload = json.loads(Path(self.bundle['bundlePath']).read_text(encoding='utf-8'))

@@ -196,7 +196,7 @@
     <section class="panel" role="dialog" aria-label="记录控件用途" hidden><h2>记录这个控件</h2><p class="preview"></p><form novalidate>
       <label for="picker-name">控件名称</label><input id="picker-name" name="name" maxlength="120" autocomplete="off">
       <label for="picker-description">这个位置是做什么的？ <span aria-hidden="true">*</span></label><textarea id="picker-description" name="description" maxlength="1500" required placeholder="例如：打开当前记录的只读详情"></textarea>
-      <label for="picker-action">允许的动作</label><select id="picker-action" name="action"><option value="read">读取信息</option><option value="click">点击</option><option value="fill">填写</option></select>
+      <label for="picker-action" hidden>允许的动作</label><select id="picker-action" name="action" hidden><option value="read">读取信息</option><option value="click">点击</option><option value="fill">填写</option></select>
       <label for="picker-result">预期结果</label><input id="picker-result" name="result" maxlength="500" autocomplete="off" placeholder="例如：详情中显示相同的记录编号">
       <p class="hint"></p><div class="error" role="alert" hidden></div><div class="actions"><button type="button" data-ui="cancel">取消</button><button class="primary" type="submit">保存控件卡</button></div>
     </form></section><div class="toast" role="status" aria-live="polite" hidden></div>`;
