@@ -1,4 +1,4 @@
-"""Narrow, versioned adapter for ZCode's private desktop task index.
+"""Narrow, schema-checked adapter for ZCode's private desktop task index.
 
 Only verified CLI session IDs are inserted. An explicit request may align only
 this picker's owned task mode; other task state is never changed. This is not
@@ -22,7 +22,7 @@ import uuid
 from workspace import sanitize_text
 
 
-SUPPORTED_VERSION = "3.16.3.8992"
+REFERENCE_SCHEMA_VERSION = "3.16.3.8992"  # Historical fixture, not a version allowlist.
 _EXECUTION_MODES = {"build", "edit", "yolo", "guarded", "auto"}
 _CLI_COLUMNS = {
     "session": {"id": "TEXT", "directory": "TEXT", "workspace_id": "TEXT", "parent_id": "TEXT",
@@ -78,6 +78,112 @@ _SCHEMA = {
         ("position", "INTEGER", 1, 0), ("is_primary", "INTEGER", 1, 0),
     ],
 }
+_PLACEMENT_SCHEMA = {
+    "task_group_admissions": [("workspace_key", "TEXT", 1, 1), ("task_id", "TEXT", 1, 2),
+                              ("system_kind", "TEXT", 0, 0), ("user_organized", "INTEGER", 1, 0),
+                              ("creation_id", "TEXT", 0, 0)],
+    "task_group_view_node_orders": [("node_type", "TEXT", 1, 1), ("node_key", "TEXT", 1, 2),
+                                    ("sort_order", "INTEGER", 1, 0), ("created_at", "INTEGER", 1, 0),
+                                    ("updated_at", "INTEGER", 1, 0)],
+}
+_PURGE_SCHEMA = [("workspace_key", "TEXT", 1, 1), ("task_id", "TEXT", 1, 2), ("state", "TEXT", 1, 0)]
+# Official v3.18.2 project-storage/schema.baseline.sql: deletion guards remain
+# enabled. Only these complete bodies are recognized; never disable a trigger.
+_PURGE_GUARDS = {
+    "task_purge_insert_guard": """CREATE TRIGGER task_purge_insert_guard BEFORE INSERT ON tasks
+      WHEN EXISTS(SELECT 1 FROM task_purge WHERE workspace_key=new.workspace_key AND task_id=new.task_id AND state='deleted')
+      BEGIN SELECT RAISE(ABORT, 'task.permanently-deleted'); END;""",
+    "task_purge_restore_guard": """CREATE TRIGGER task_purge_restore_guard BEFORE UPDATE OF archived ON tasks
+      WHEN new.archived=0 AND EXISTS(SELECT 1 FROM task_purge WHERE workspace_key=new.workspace_key AND task_id=new.task_id)
+      BEGIN SELECT RAISE(ABORT, 'task.permanent-deletion-pending'); END;""",
+}
+
+# Only columns actually queried or supplied by this adapter are required.
+# Other desktop-owned columns are retained without imposing their old order.
+_INSERT_COLUMNS = {
+    "tasks": set("workspace_key workspace_path task_id title task_status provider mode forked_from_task_id created_at updated_at last_unread_at pinned archived deleted title_overridden meta_json searchable_text host_id root_path project_id execution_directories cli_title handoff_pending cli_title_source cli_created_at cli_updated_at cli_last_outcome cli_deleted".split()),
+    "projects": set("project_id host_id name position deleted created_at updated_at".split()),
+    "project_roots": set("project_id root_path position is_primary".split()),
+    "task_group_admissions": {"workspace_key", "task_id", "user_organized"},
+    "task_group_view_node_orders": {"node_type", "node_key", "sort_order", "created_at", "updated_at"},
+}
+_REQUIRED_COLUMNS = {
+    "tasks": _INSERT_COLUMNS["tasks"] | {"workspace_identity"},
+    "hosts": {"host_id", "kind"},
+    "projects": _INSERT_COLUMNS["projects"],
+    "project_roots": _INSERT_COLUMNS["project_roots"],
+    **{table: {column[0] for column in columns} for table, columns in _PLACEMENT_SCHEMA.items()},
+    "task_purge": {column[0] for column in _PURGE_SCHEMA},
+}
+_IDENTITY_KEYS = {"tasks": frozenset(("workspace_key", "task_id")),
+                  "hosts": frozenset(("host_id",)), "projects": frozenset(("project_id",)),
+                  "project_roots": frozenset(("project_id", "root_path"))}
+_IDENTITY_KEYS.update({"task_group_admissions": frozenset(("workspace_key", "task_id")),
+                       "task_group_view_node_orders": frozenset(("node_type", "node_key")),
+                       "task_purge": frozenset(("workspace_key", "task_id"))})
+_UNIQUE_RULES = {
+    "tasks": {(_IDENTITY_KEYS["tasks"], False), (frozenset(("host_id", "task_id")), False)},
+    "hosts": {(_IDENTITY_KEYS["hosts"], False)},
+    "projects": {(_IDENTITY_KEYS["projects"], False), (frozenset(("host_id", "name")), True)},
+    "project_roots": {(_IDENTITY_KEYS["project_roots"], False)},
+    **{table: {(_IDENTITY_KEYS[table], False)} for table in (*_PLACEMENT_SCHEMA, "task_purge")},
+}
+_FOREIGN_RULES = {
+    "projects": {frozenset({("host_id", "hosts", "host_id")})},
+    "project_roots": {frozenset({("project_id", "projects", "project_id")})},
+    "tasks": {frozenset({("host_id", "hosts", "host_id")}),
+              frozenset({("project_id", "projects", "project_id")}),
+              frozenset({("project_id", "project_roots", "project_id"),
+                         ("root_path", "project_roots", "root_path")})},
+    **{table: set() for table in _PLACEMENT_SCHEMA},
+}
+
+
+def _affinity(declared):
+    kind = str(declared).upper()
+    if "INT" in kind:return "INTEGER"
+    if any(part in kind for part in ("CHAR", "CLOB", "TEXT")):return "TEXT"
+    if not kind or "BLOB" in kind:return "BLOB"
+    if any(part in kind for part in ("REAL", "FLOA", "DOUB")):return "REAL"
+    return "NUMERIC"
+
+
+def _quoted(value):
+    return '"' + str(value).replace('"', '""') + '"'
+
+
+def _null_default(value):
+    return value is None or str(value).strip().strip("() \t\r\n").upper() == "NULL"
+
+
+def _mask_sql(sql):
+    # Keep offsets while excluding quoted names, string contents and comments.
+    return re.sub(r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|`(?:``|[^`])*`|\[[^\]]*\]|--[^\n]*|/\*.*?\*/",
+                  lambda match: " " * len(match.group()), sql or "", flags=re.S)
+
+
+def _active_project_index(sql):
+    clauses = list(re.finditer(r"\bWHERE\b", _mask_sql(sql), re.I))
+    if not clauses:return False
+    predicate = re.sub(r'[\s()"`\[\];]', '', sql[clauses[-1].end():]).lower()
+    return predicate in {"deleted=0", "0=deleted", "deleted==0", "0==deleted", "deletedis0", "0isdeleted"}
+
+
+def _trigger_tokens(sql):
+    tokens = re.findall(r"--[^\n]*|/\*.*?\*/|'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|`(?:``|[^`])*`|\[[^\]]*\]|[A-Za-z_][A-Za-z_0-9]*|==|[^\s]", sql or "", flags=re.S)
+    normalized = []
+    for token in tokens:
+        if token.startswith(("--", "/*")) or token in {";", "(", ")"}:continue
+        if token.startswith("'"):
+            normalized.append(token)
+        elif token.startswith(('"', '`', '[')):
+            normalized.append(token[1:-1].replace('""', '"').replace('``', '`').lower())
+        else:normalized.append(token.lower().replace('==', '='))
+    if normalized[2:5] == ['if', 'not', 'exists']:del normalized[2:5]
+    for index in range(len(normalized)-2):
+        if normalized[index:index+3] == ['for','each','row']:
+            del normalized[index:index+3];break
+    return tuple(normalized)
 
 
 def _path_key(value):
@@ -135,18 +241,16 @@ class DesktopTaskIndex:
         if not self.root.is_dir() or self.root.parent == self.root:
             raise DesktopIndexError("需要明确且存在的采集工作区，不能使用磁盘根目录。")
         local = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-        self.desktop = Path(desktop_path or local / "Programs" / "ZCode" / "ZCode.exe").expanduser().resolve()
+        self.desktop = Path(desktop_path or os.environ.get('CDP_PICKER_DESKTOP_EXE') or local / "Programs" / "ZCode" / "ZCode.exe").expanduser().resolve()
         if not self.desktop.is_file() or self.desktop.name.lower() != "zcode.exe":
             raise DesktopIndexError("请选择真实安装的 ZCode.exe。")
         # Explicit version injection supports isolated schema tests; production
         # callers omit it and read the executable's immutable version resource.
         self.version = desktop_version or _product_version(self.desktop)
-        if self.version != SUPPORTED_VERSION:
-            raise DesktopIndexError("桌面索引仅适配 ZCode " + SUPPORTED_VERSION + "，当前版本不受支持。")
-        self.index = Path(database_path or _default_index()).expanduser().resolve()
+        self.index = Path(database_path or os.environ.get('CDP_PICKER_DESKTOP_INDEX') or _default_index()).expanduser().resolve()
         if not self.index.is_file():
             raise DesktopIndexError("未找到已有桌面任务索引，请先在 ZCode 中初始化工作区。")
-        self.cli_db = Path(cli_db_path or _default_cli_db()).expanduser().resolve()
+        self.cli_db = Path(cli_db_path or os.environ.get('CDP_PICKER_CLI_DATABASE') or _default_cli_db()).expanduser().resolve()
         self.backups = (self.root / ".handoffs" / "index-backups").resolve()
         if not self.backups.is_relative_to(self.root):
             raise DesktopIndexError("索引备份目录超出当前采集工作区。")
@@ -171,10 +275,10 @@ class DesktopTaskIndex:
         for table, expected in _CLI_COLUMNS.items():
             if table not in tables:
                 raise DesktopIndexError("CLI 会话库结构未知，缺少：" + table)
-            columns = {row[1]: (row[2].upper(), row[5]) for row in connection.execute("PRAGMA table_info(" + table + ")")}
-            if any(columns.get(name, (None,))[0] != kind for name, kind in expected.items()):
+            columns = {row[1]: (_affinity(row[2]), row[5]) for row in connection.execute("PRAGMA table_info(" + table + ")")}
+            if any(columns.get(name, (None,))[0] != _affinity(kind) for name, kind in expected.items()):
                 raise DesktopIndexError("CLI 会话库元数据结构未知：" + table)
-            if table in {"session", "session_entry"} and columns["id"][1] != 1:
+            if table in {"session", "session_entry"} and {name for name, (_, position) in columns.items() if position} != {"id"}:
                 raise DesktopIndexError("CLI 会话库主键未知：" + table)
 
     def _native_session(self, session_id, mode):
@@ -216,22 +320,107 @@ class DesktopTaskIndex:
 
     @staticmethod
     def _validate_schema(connection):
-        for table, expected in _SCHEMA.items():
-            actual = [(row[1], row[2].upper(), row[3], row[5]) for row in connection.execute("PRAGMA table_info(" + table + ")")]
-            if actual != expected:
-                raise DesktopIndexError("桌面索引结构未知，拒绝写入：" + table)
-        indexes = {row[0]: re.sub(r"\s+", "", (row[1] or "").lower()) for row in connection.execute("SELECT name,sql FROM sqlite_master WHERE type='index'")}
-        required = {
-            "idx_tasks_host_task": "createuniqueindexidx_tasks_host_taskontasks(host_id,task_id)",
-            "idx_projects_host_name": "createuniqueindexidx_projects_host_nameonprojects(host_id,name)wheredeleted=0",
-        }
-        if any(indexes.get(name) != sql for name, sql in required.items()):
-            raise DesktopIndexError("桌面索引唯一约束未知，拒绝写入。")
-        if connection.execute("SELECT 1 FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('tasks','hosts','projects','project_roots')").fetchone():
-            raise DesktopIndexError("桌面索引存在未知写入触发器，拒绝适配。")
+        names = {row[0].lower() for row in connection.execute("SELECT name FROM sqlite_master WHERE type IN ('table','view')")}
+        placement = set(_PLACEMENT_SCHEMA) & names
+        if placement and placement != set(_PLACEMENT_SCHEMA):
+            raise DesktopIndexError("桌面任务接纳结构不完整，admissions 与 node_orders 必须同时存在。")
+        triggers = list(connection.execute("SELECT name,tbl_name,sql FROM sqlite_master WHERE type='trigger'"))
+        guards = {row[0].lower() for row in triggers if row[0].lower() in _PURGE_GUARDS}
+        purge = "task_purge" in names or bool(guards)
+        if purge and ("task_purge" not in names or guards != set(_PURGE_GUARDS)):
+            raise DesktopIndexError("桌面永久删除保护结构不完整，保留墓碑与两个原生保护触发器后再试。")
+        tables = dict(_SCHEMA)
+        if placement:tables.update(_PLACEMENT_SCHEMA)
+        if purge:tables["task_purge"] = _PURGE_SCHEMA
+        for table, reference in tables.items():
+            definition = connection.execute("SELECT type,sql FROM sqlite_master WHERE name=? COLLATE NOCASE", (table,)).fetchone()
+            if not definition or definition[0] != "table":
+                raise DesktopIndexError("桌面索引缺少必需表：" + table)
+            sql = definition[1] or ""
+            columns = {row[1].lower(): row for row in connection.execute("PRAGMA table_xinfo(" + _quoted(table) + ")")}
+            kinds = {name: kind for name, kind, _, _ in reference}
+            for name in _REQUIRED_COLUMNS[table]:
+                if name not in columns:
+                    raise DesktopIndexError("桌面索引缺少必需字段：" + table + "." + name)
+                if _affinity(columns[name][2]) != _affinity(kinds[name]):
+                    raise DesktopIndexError("桌面索引字段类型不兼容：" + table + "." + name)
+                if len(columns[name]) > 6 and columns[name][6]:
+                    raise DesktopIndexError("桌面索引必需字段变为生成/隐藏列：" + table + "." + name)
+            if table in _INSERT_COLUMNS:
+                for name, column in columns.items():
+                    if len(column) > 6 and column[6]:
+                        raise DesktopIndexError("桌面索引存在未验证的生成列写入表达式：" + table + "." + name)
+                    if name not in _INSERT_COLUMNS[table] and column[3] and _null_default(column[4]):
+                        raise DesktopIndexError("桌面索引新增必填字段缺少有效默认值：" + table + "." + name)
+                if re.search(r"\bCHECK\s*\(", _mask_sql(sql), re.I):
+                    raise DesktopIndexError("桌面索引存在未验证的 CHECK 写入约束：" + table)
+                foreign_keys = {}
+                for foreign in connection.execute("PRAGMA foreign_key_list(" + _quoted(table) + ")"):
+                    foreign_keys.setdefault(foreign[0], set()).add((str(foreign[3]).lower(), str(foreign[2]).lower(), str(foreign[4]).lower()))
+                for relationships in foreign_keys.values():
+                    if frozenset(relationships) not in _FOREIGN_RULES[table]:
+                        raise DesktopIndexError("桌面索引存在未验证的外键写入约束：" + table + "." + ",".join(sorted(str(item[0]) for item in relationships)))
+            if table == "tasks":
+                for name in ("workspace_identity", "forked_from_task_id"):
+                    if columns[name][3] or (name == "workspace_identity" and not _null_default(columns[name][4])):
+                        raise DesktopIndexError("桌面本地任务字段不再允许原生空身份：tasks." + name)
+            if table == "task_group_admissions":
+                for name in ("system_kind", "creation_id"):
+                    if columns[name][3] or not _null_default(columns[name][4]):
+                        raise DesktopIndexError("桌面任务接纳字段不再允许普通任务的空类型：" + name)
+            rules = set()
+            for index in connection.execute("PRAGMA index_list(" + _quoted(table) + ")"):
+                if not index[2]:continue
+                details = [row for row in connection.execute("PRAGMA index_xinfo(" + _quoted(index[1]) + ")") if row[5]]
+                if any(row[1] < 0 or not row[2] or str(row[4]).upper() != "BINARY" for row in details):
+                    raise DesktopIndexError("桌面索引唯一约束包含未知表达式或排序规则：" + table)
+                keys = frozenset(row[2].lower() for row in details)
+                partial = bool(index[4])
+                index_sql = connection.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (index[1],)).fetchone()
+                if (keys, partial) not in _UNIQUE_RULES[table] or (partial and not _active_project_index(index_sql[0] if index_sql else "")):
+                    if table in _INSERT_COLUMNS:
+                        raise DesktopIndexError("桌面索引存在不兼容的唯一约束：" + table + "(" + ",".join(sorted(keys)) + ")")
+                    continue  # Extra constraints on lookup-only tables cannot affect our writes.
+                rules.add((keys, partial))
+            if not _UNIQUE_RULES[table].issubset(rules):
+                raise DesktopIndexError("桌面索引缺少必需主键/唯一语义：" + table)
+        for trigger in triggers:
+            expected = _PURGE_GUARDS.get(trigger[0].lower())
+            if expected and (trigger[1].lower() != "tasks" or _trigger_tokens(trigger[2]) != _trigger_tokens(expected)):
+                raise DesktopIndexError("桌面永久删除保护触发器语义未知：" + trigger[0])
+            if trigger[1].lower() not in tables or trigger[1].lower() == "task_purge":continue
+            if not expected:
+                raise DesktopIndexError("桌面索引存在未知写入触发器，拒绝适配：" + trigger[0])
+        if placement and "task_group_members" in names:
+            definition = connection.execute("SELECT type FROM sqlite_master WHERE name='task_group_members' COLLATE NOCASE").fetchone()
+            members = {row[1].lower(): _affinity(row[2]) for row in connection.execute('PRAGMA table_xinfo("task_group_members")')}
+            if not definition or definition[0] != "table" or any(members.get(name) != "TEXT" for name in ("workspace_key", "task_id")):
+                raise DesktopIndexError("桌面已有任务分组映射结构不兼容，拒绝重排。")
         local = connection.execute("SELECT kind FROM hosts WHERE host_id='local'").fetchone()
         if not local or local[0] != "local":
             raise DesktopIndexError("桌面本地主机映射未初始化或未知，拒绝推断。")
+        return bool(placement)
+
+    @staticmethod
+    def _ensure_not_purged(connection, workspace_key, session_id):
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_purge' COLLATE NOCASE").fetchone():
+            if connection.execute("SELECT 1 FROM task_purge WHERE workspace_key=? AND task_id=? LIMIT 1", (workspace_key, session_id)).fetchone():
+                raise DesktopIndexError("该会话存在永久删除或待删除墓碑，拒绝恢复或重新登记。")
+
+    @staticmethod
+    def _admit_new_task(connection, workspace_key, session_id, now):
+        if connection.execute("SELECT 1 FROM task_group_admissions WHERE workspace_key=? AND task_id=?", (workspace_key, session_id)).fetchone():
+            return
+        key = json.dumps([workspace_key, session_id], ensure_ascii=False, separators=(',', ':'))
+        ordered = connection.execute("SELECT 1 FROM task_group_view_node_orders WHERE node_type='task' AND node_key=?", (key,)).fetchone()
+        member = None
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_group_members' COLLATE NOCASE").fetchone():
+            member = connection.execute("SELECT 1 FROM task_group_members WHERE workspace_key=? AND task_id=?", (workspace_key, session_id)).fetchone()
+        legacy = bool(ordered or member)
+        connection.execute("INSERT INTO task_group_admissions(workspace_key,task_id,user_organized) VALUES(?,?,?)", (workspace_key, session_id, int(legacy)))
+        if not legacy:
+            order = connection.execute("SELECT coalesce(min(sort_order),0)-1 FROM task_group_view_node_orders").fetchone()[0]
+            connection.execute("INSERT INTO task_group_view_node_orders(node_type,node_key,sort_order,created_at,updated_at) VALUES('task',?,?,?,?)", (key, order, now, now))
 
     def _project(self, connection):
         rows = connection.execute("SELECT p.project_id,p.name,r.root_path FROM projects p JOIN project_roots r ON r.project_id=p.project_id WHERE p.host_id='local' AND p.deleted=0").fetchall()
@@ -244,13 +433,14 @@ class DesktopTaskIndex:
         """Read-only checks to perform before starting a paid CLI task."""
         try:
             with closing(self._connect()) as connection:
-                self._validate_schema(connection)
+                placement = self._validate_schema(connection)
                 project = self._project(connection)
             with closing(self._connect_cli()) as cli:
                 self._validate_cli_schema(cli)
             return {"canRegister": True, "desktopVersion": self.version, "indexPath": str(self.index),
                     "workspacePath": str(self.root), "workspaceKey": str(self.root),
                     "cliDatabasePath": str(self.cli_db), "cliSchemaChecked": True,
+                    "taskPlacement": "native-root-admission" if placement else "legacy",
                     "projectId": project["project_id"] if project else None,
                     "willCreateProject": project is None, "backupDirectory": str(self.backups)}
         except sqlite3.Error as error:
@@ -311,6 +501,7 @@ class DesktopTaskIndex:
         return {"taskId": row["task_id"], "sessionId": row["task_id"], "projectId": row["project_id"],
                 "hostId": row["host_id"], "workspaceKey": row["workspace_key"], "rootPath": row["root_path"],
                 "mode": row["mode"],
+                "desktopVersion": self.version,
                 "indexPath": str(self.index), "backupPath": str(backup) if backup else None,
                 "created": created, "modeUpdated": mode_updated, "indexRegistered": True, "guiVisibilityVerified": False}
 
@@ -334,6 +525,7 @@ class DesktopTaskIndex:
         native = self._native_session(session_id, mode)
         try:
             with closing(self._connect()) as connection:
+                self._ensure_not_purged(connection, native['directory'], session_id)
                 existing = self._existing(connection, session_id, self._project(connection), native)
                 if existing and not self._needs_mode_update(existing, native, task_relative, update_owned_mode):
                     return self._result(existing)
@@ -341,10 +533,11 @@ class DesktopTaskIndex:
             with closing(self._connect(writable=True)) as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 try:
-                    self._validate_schema(connection)
+                    placement = self._validate_schema(connection)
                     current_native = self._native_session(session_id, mode)
                     if current_native != native:
                         raise DesktopIndexError("CLI 会话身份在登记期间变化，原索引保持不变。")
+                    self._ensure_not_purged(connection, native['directory'], session_id)
                     project = self._project(connection)
                     existing = self._existing(connection, session_id, project, native)
                     if existing:
@@ -369,18 +562,19 @@ class DesktopTaskIndex:
                             name, number = base + " (CDP " + str(number) + ")", number + 1
                         project = {"project_id": str(uuid.uuid4()), "root_path": str(self.root), "name": name}
                         position = connection.execute("SELECT coalesce(min(position),1)-1 FROM projects WHERE host_id='local'").fetchone()[0]
-                        connection.execute("INSERT INTO projects(project_id,host_id,name,position,created_at,updated_at) VALUES(?,'local',?,?,?,?)", (project["project_id"], name, position, now, now))
+                        connection.execute("INSERT INTO projects(project_id,host_id,name,position,deleted,created_at,updated_at) VALUES(?,'local',?,?,0,?,?)", (project["project_id"], name, position, now, now))
                         connection.execute("INSERT INTO project_roots(project_id,root_path,position,is_primary) VALUES(?,?,0,1)", (project["project_id"], project["root_path"]))
                     meta = json.dumps({"cdpControlPicker": {"schemaVersion": 1, "sessionId": session_id, "taskPath": task_relative}}, ensure_ascii=False)
                     connection.execute("""INSERT INTO tasks(
                         workspace_key,workspace_path,task_id,title,task_status,provider,mode,forked_from_task_id,
                         created_at,updated_at,last_unread_at,pinned,archived,deleted,title_overridden,
                         meta_json,searchable_text,host_id,root_path,project_id,execution_directories,
-                        cli_title,handoff_pending,cli_title_source,cli_created_at,cli_updated_at,cli_deleted)
+                        cli_title,handoff_pending,cli_title_source,cli_created_at,cli_updated_at,cli_deleted,cli_last_outcome)
                         VALUES(?,?,?,?,'completed','glm',?,?,?,?,0,0,0,0,0,?,'','local',?,?,
-                               '[]',?,0,'first_input',?,?,0)""",
+                               '[]',?,0,'first_input',?,?,0,'completed')""",
                         (native["directory"], native["directory"], session_id, title, mode, native["parentId"], now, now, meta,
                          project["root_path"], project["project_id"], title, now, now))
+                    if placement:self._admit_new_task(connection, native['directory'], session_id, now)
                     row = self._existing(connection, session_id, project, native)
                     if row is None:
                         raise DesktopIndexError("索引事务回读失败。")

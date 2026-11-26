@@ -147,6 +147,66 @@ class TaskTests(unittest.TestCase):
                 self.assertEqual(self.execute()['error']['code'], code)
                 self.assertEqual(self.clients, [])
 
+    def test_inferred_policy_uses_bundle_policy_and_keeps_legacy_annotations_unchanged(self):
+        self.bundle['taskIntent']['actionPolicy'] = 'infer-from-purpose'
+        for index, (action, capture, annotation) in enumerate((
+                ('click', 'cap-query', {'allowedActions': ['read']}),
+                ('fill', 'cap-input', {}))):
+            with self.subTest(action=action):
+                self.job_path = self.learning / f'inferred-{index}.json'
+                selected = next(item for item in self.bundle['captures'] if item['captureId'] == capture)
+                selected['capture']['annotation'] = annotation
+                before = copy.deepcopy(annotation)
+                self.action(action, capture, **({'value': 'explicit fixture value'} if action == 'fill' else {}))
+                result = self.execute()
+                self.assertEqual(result['status'], 'completed')
+                self.assertEqual(result['actionPolicy'], 'infer-from-purpose')
+                self.assertIn('"actionPolicy": "infer-from-purpose"', self.clients[-1].calls[-1][1]['expression'])
+                self.assertEqual(selected['capture']['annotation'], before)
+                self.assertEqual(json.loads(self.bundle_path.read_text(encoding='utf-8'))['captures'], self.bundle['captures'])
+
+    def test_job_cannot_override_legacy_policy_and_unknown_bundle_policy_never_connects(self):
+        self.action('fill', 'cap-query', value='fixture')
+        self.job['actionPolicy'] = 'infer-from-purpose'
+        self.assertEqual(self.execute()['error']['code'], 'action-not-allowed')
+        self.assertEqual(self.clients, [])
+        for policy in (None, True, [], 'allow-everything'):
+            with self.subTest(policy=policy):
+                self.bundle['taskIntent']['actionPolicy'] = policy
+                self.assertEqual(self.execute()['error']['code'], 'unsupported-action-policy')
+                self.assertEqual(self.clients, [])
+
+    def test_inferred_policy_retains_scope_parameter_and_capture_guards(self):
+        self.bundle['taskIntent']['actionPolicy'] = 'infer-from-purpose'
+        for changes, code in (({'purposeScope': 'business-write'}, 'purpose-not-authorized'),
+                              ({'action': 'fill'}, 'missing-action-value'),
+                              ({'action': 'check', 'value': 'yes'}, 'missing-action-value'),
+                              ({'captureId': 'cap-other'}, 'invalid-action')):
+            with self.subTest(code=code):
+                self.job = {'schemaVersion': 1, 'bundlePath': str(self.bundle_path), 'operation': 'inspect'}
+                self.action()
+                self.job.update(changes)
+                self.assertEqual(self.execute()['error']['code'], code)
+                self.assertEqual(self.clients, [])
+
+    def test_policy_change_cannot_reuse_an_old_action_receipt(self):
+        self.action()
+        self.assertEqual(self.execute()['status'], 'completed')
+        self.bundle['taskIntent']['actionPolicy'] = 'infer-from-purpose'
+        result = self.execute()
+        self.assertEqual(result['error']['code'], 'job-was-modified')
+        self.assertEqual(len(self.clients), 1)
+
+    def test_inferred_action_remains_once_only_after_uncertain_submission(self):
+        self.bundle['taskIntent']['actionPolicy'] = 'infer-from-purpose'
+        self.action()
+        self.failure = True
+        self.assertEqual(self.execute()['status'], 'unknown')
+        second = self.execute()
+        self.assertEqual(second['status'], 'unknown')
+        self.assertTrue(second['duplicate'])
+        self.assertEqual(len(self.clients), 1)
+
     def test_same_action_job_is_executed_once_and_values_are_not_journaled(self):
         secret = 'VALUE_ONLY_IN_EXPLICIT_JOB_NOT_IN_ANY_RESULT'
         self.action('fill', 'cap-input', value=secret)
@@ -222,6 +282,7 @@ print(json.dumps(run_task(sys.argv[1],sys.argv[2],client_factory=Client)))
             stdout, stderr = process.communicate(timeout=10)
             self.assertEqual(process.returncode, 0, stderr)
             outcomes.append(json.loads(stdout))
+        self.assertTrue(marker.is_file(), outcomes)
         self.assertEqual(marker.read_text(encoding='utf-8').splitlines(), ['dispatch'])
         self.assertEqual(sum(result.get('duplicate') is True for result in outcomes), 1)
         self.assertTrue(all(result['status'] in {'completed', 'unknown'} for result in outcomes))
@@ -295,12 +356,13 @@ process.stdout.write(JSON.stringify({result,events}));
 
 @unittest.skipUnless(shutil.which('node'), 'Local Node runtime unavailable for fixed DOM fixture')
 class ScriptTests(unittest.TestCase):
-    def execute(self, action=None, elements=None, selectors=None, text_nodes=None, **extra):
+    def execute(self, action=None, elements=None, selectors=None, text_nodes=None, annotation=None, **extra):
         task = {'operation': 'act' if action else 'inspect', 'expectedLiveUrl': 'https://example.test/orders',
                 'captureId': 'cap-query', 'action': action,
                 'captures': [{'captureId': 'cap-query', 'capture': {
                     'control': {'locatorCandidates': [], 'selectors': selectors or [{'strategy': 'css', 'value': '#query'}]},
-                    'annotation': {'allowedActions': ['read', 'click', 'fill', 'select', 'check']}}}], **extra}
+                    'annotation': ({'allowedActions': ['read', 'click', 'fill', 'select', 'check']}
+                                   if annotation is None else annotation)}}], **extra}
         fixture = {'task': task}
         if elements is not None:fixture['elements'] = elements
         if text_nodes is not None:fixture['textNodes'] = text_nodes
@@ -336,6 +398,41 @@ class ScriptTests(unittest.TestCase):
         self.assertTrue(receipt['result']['evidence']['valueMatchesRequested'])
         self.assertEqual(receipt['events'], ['input', 'change'])
         self.assertNotIn('PRIVATE_VALUE', json.dumps(receipt))
+
+    def test_inferred_actions_do_not_require_legacy_allowed_actions(self):
+        input_element = [{'tagName': 'INPUT', 'attributes': {'id': 'query'}}]
+        old = self.execute('fill', elements=input_element, value='fixture', annotation={'allowedActions': ['read']})
+        self.assertEqual(old['result']['error']['code'], 'action-not-allowed')
+        self.assertEqual(old['events'], [])
+        cases = [('click', None, {}, ['click']),
+                 ('fill', input_element, {'value': 'fixture'}, ['input', 'change']),
+                 ('check', [{'tagName': 'INPUT', 'attributes': {'id': 'query', 'type': 'checkbox'}}],
+                  {'value': True}, ['click']),
+                 ('select', [{'tagName': 'SELECT', 'attributes': {'id': 'query'},
+                              'options': [{'value': 'fixture', 'disabled': False}]}],
+                  {'value': 'fixture'}, ['input', 'change'])]
+        for action, elements, extra, events in cases:
+            with self.subTest(action=action):
+                receipt = self.execute(action, elements=elements, annotation={},
+                                       actionPolicy='infer-from-purpose', **extra)
+                self.assertEqual(receipt['result']['status'], 'completed')
+                self.assertEqual(receipt['events'], events)
+
+    def test_inferred_policy_does_not_bypass_dom_route_or_parameter_checks(self):
+        cases = [('fill', {}, 'invalid-fill'),
+                 ('click', {'expectedLiveUrl': 'https://example.test/wrong'}, 'page-changed'),
+                 ('click', {'elements': [{'tagName': 'BUTTON', 'disabled': True, 'attributes': {'id': 'query'}}]}, 'control-unavailable'),
+                 ('click', {'elements': [{'tagName': 'INPUT', 'attributes': {'id': 'query', 'type': 'password'}}]}, 'control-not-located')]
+        for action, extra, code in cases:
+            with self.subTest(action=action, code=code):
+                receipt = self.execute(action, annotation={}, actionPolicy='infer-from-purpose', **extra)
+                self.assertEqual(receipt['result']['error']['code'], code)
+                self.assertFalse(receipt['result']['actionAttempted'])
+                self.assertEqual(receipt['events'], [])
+        for policy in (None, 'allow-everything'):
+            receipt = self.execute('click', actionPolicy=policy)
+            self.assertEqual(receipt['result']['error']['code'], 'unsupported-action-policy')
+            self.assertEqual(receipt['events'], [])
 
     def test_click_occurs_once_and_does_not_claim_business_success(self):
         receipt = self.execute('click')

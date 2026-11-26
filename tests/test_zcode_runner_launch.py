@@ -57,13 +57,49 @@ class LaunchTests(unittest.TestCase):
         self.assertNotIn("ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", prepared)
         self.assertEqual(inherited, {"PATH": "fixture-path", "ELECTRON_RUN_AS_NODE": "0"})
 
-    def test_default_prefers_installed_desktop_over_path_cli(self):
+    def test_default_prefers_path_cli_over_installed_desktop(self):
         appdata = self.root / "Local App Data"
         executable, bundle, _ = self.desktop(appdata / "Programs" / "ZCode")
         other = self.root / "other-zcode.exe"
         other.write_bytes(b"fixture")
         with patch.dict(os.environ, {"LOCALAPPDATA": str(appdata)}, clear=True), patch("zcode_runner.shutil.which", return_value=str(other)):
+            self.assertEqual(resolve_command(), [str(other.resolve())])
+
+    def test_explicit_command_name_and_script_resolve_without_shell(self):
+        node = self.root / 'node.exe'
+        node.write_bytes(b'fixture')
+        script = self.root / 'zcode.cjs'
+        script.write_text('// fixture', encoding='utf-8')
+        with patch('zcode_runner.shutil.which', return_value=str(node)):
+            self.assertEqual(resolve_command('zcode-cli'), [str(node.resolve())])
+            self.assertEqual(resolve_command(script), [str(node.resolve()), str(script.resolve())])
+        inherited = {'ELECTRON_RUN_AS_NODE': '1', 'PATH': 'fixture'}
+        child = command_environment([str(node), str(script)], inherited)
+        self.assertNotIn('ELECTRON_RUN_AS_NODE', child)
+        self.assertEqual(inherited['ELECTRON_RUN_AS_NODE'], '1')
+
+    def test_no_path_cli_falls_back_to_complete_desktop_bundle(self):
+        executable, bundle, _ = self.desktop()
+        with patch('zcode_runner.shutil.which', return_value=None), patch(
+                'zcode_runner._installed_candidates', return_value=[executable]):
             self.assertEqual(resolve_command(), [str(executable), str(bundle)])
+
+    def test_broken_path_cli_does_not_silently_switch_to_desktop(self):
+        executable, _, _ = self.desktop()
+        wrapper = self.root / 'zcode.cmd'
+        wrapper.write_text('@echo off\necho broken\n', encoding='utf-8')
+        with patch('zcode_runner.shutil.which', return_value=str(wrapper)), patch(
+                'zcode_runner._installed_candidates', return_value=[executable]), self.assertRaises(RunnerError):
+            resolve_command()
+
+    def test_incomplete_desktop_is_never_started_as_native_cli(self):
+        executable = self.root / 'Incomplete Desktop' / 'ZCode.exe'
+        resources = executable.parent / 'resources'
+        resources.mkdir(parents=True)
+        executable.write_bytes(b'fixture')
+        (resources / 'app.asar').write_bytes(b'fixture')
+        with self.assertRaises(RunnerError):
+            resolve_command(executable)
 
     def test_explicit_provider_environment_is_preserved(self):
         executable, _, _ = self.desktop()

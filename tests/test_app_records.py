@@ -266,7 +266,7 @@ class HiddenTkRecordTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix='picker-hidden-records-')
         self.root = app.tk.Tk()
         self.root.withdraw()
-        self.picker = app.PickerApp(self.root, workspace_path=Path(self.temporary.name))
+        self.picker = app.PickerApp(self.root, workspace_path=Path(self.temporary.name),settings_path=Path(self.temporary.name)/'local-settings.json')
         # Allocate real child widths without mapping the withdrawn host.
         body = self.picker._layout_specs[str(self.root)][1]
         body.pack_forget()
@@ -332,6 +332,10 @@ class HiddenTkRecordTests(unittest.TestCase):
         window = self.open_hidden_editor()
         self.assertEqual(window.state(), 'withdrawn')
         widgets = self.descendants(window)
+        self.assertFalse(any(isinstance(widget, app.ttk.Checkbutton) for widget in widgets),
+                         'Action selection must stay out of the record editor')
+        self.assertFalse(any(isinstance(widget, app.ttk.Label) and '允许动作' in widget.cget('text')
+                             for widget in widgets))
         entry = next(widget for widget in widgets if isinstance(widget, app.ttk.Entry))
         entry.delete(0, 'end')
         entry.insert(0, '订单编号')
@@ -355,6 +359,7 @@ class HiddenTkRecordTests(unittest.TestCase):
         self.assertEqual(after['annotation']['preconditions'], '必须登录')
         self.assertEqual(after['control'], before['control'])
         self.assertEqual(after['page'], before['page'])
+        self.assertEqual(after['annotation']['allowedActions'], before['annotation']['allowedActions'])
         self.root.update_idletasks()
         self.assertEqual(picker.record_list.cards['cap-first']['titleText'], '订单编号')
         self.assertIn('订单编号', picker.record_list.cards['cap-first']['title'].cget('text'))
@@ -362,6 +367,87 @@ class HiddenTkRecordTests(unittest.TestCase):
             picker.record_list.cards['cap-first']['menu'].invoke(3)
         self.assertEqual(tuple(picker.record_list.cards), ('cap-second',))
         self.assertEqual(Path(bundle['bundlePath']).read_bytes(), snapshot)
+
+    def test_hidden_settings_detects_only_on_click_and_handles_close_before_result(self):
+        picker=self.picker
+        original=app.tk.Toplevel
+        def hidden(*args,**kwargs):
+            window=original(*args,**kwargs);window.withdraw();return window
+        workers=[]
+        calls=[]
+        picker._background=workers.append
+        with patch.object(app.tk,'Toplevel',side_effect=hidden):
+            picker.open_settings()
+        self.root.update_idletasks()
+        window=picker.settings_window
+        self.assertEqual(window.state(),'withdrawn')
+        self.assertEqual(picker.zcode_path.get(),'')
+        labels=[widget.cget('text') for widget in self.descendants(window) if isinstance(widget,app.ttk.Label)]
+        self.assertIn('ZCode CLI',labels)
+        self.assertEqual(workers,[],'Opening settings must not auto-detect a backend')
+        picker.backend_probe_button.invoke()
+        self.assertTrue(picker.backend_probe_button.instate(['disabled']))
+        window.destroy()
+        def probe(**kwargs):
+            calls.append(kwargs)
+            return {'ok':True,'phase':'ready','runtimeType':'native-cli','command':['fixture-cli.exe'],
+                    'cliVersion':'0.17.0','transport':'app-server-stdio','message':'无模型检测通过。'}
+        with patch.dict(sys.modules,{'zcode_diagnostics':SimpleNamespace(probe_backend=probe)}):
+            workers[0]()
+        picker._drain()
+        self.assertEqual(calls,[{'commandPath':None,'cwd':picker.workspace_value,'timeout_seconds':12}])
+        self.assertFalse(picker._backend_probe_active)
+        self.assertIn('native-cli',picker.backend_probe_status.get())
+        self.assertFalse(picker.sending)
+
+    def test_settings_catalog_controls_select_real_ids_and_save_local_configuration(self):
+        picker=self.picker
+        original=app.tk.Toplevel
+        def hidden(*args,**kwargs):
+            window=original(*args,**kwargs);window.withdraw();return window
+        with patch.object(app.tk,'Toplevel',side_effect=hidden):picker.open_settings()
+        self.root.update_idletasks()
+        picker._model_catalog_request='native-catalog-fixture'
+        picker._model_catalog_active=True
+        picker._show_model_catalog({'requestId':'native-catalog-fixture','scope':picker._model_scope(),
+            'result':{'ok':True,'models':[{'providerId':'real-provider','modelId':'real-model',
+                'label':'实际模型','providerLabel':'实际服务商','available':True}],
+                'message':'已读取目录，不发模型。'}})
+        provider=next(label for label,key in picker._provider_choices.items() if key=='real-provider')
+        picker.model_provider_choice.set(provider)
+        picker.model_provider_combo.event_generate('<<ComboboxSelected>>')
+        self.root.update_idletasks()
+        picker.model_combo.current(0)
+        picker.model_combo.event_generate('<<ComboboxSelected>>')
+        self.root.update_idletasks()
+        self.assertEqual(picker._model_selection,{'providerId':'real-provider','modelId':'real-model'})
+        saved=json.loads(picker._settings_store.path.read_text(encoding='utf-8'))
+        self.assertEqual(saved['modelSelection'],picker._model_selection)
+        self.assertNotIn('label',str(saved))
+        self.assertEqual(saved['workspaceDir'],self.temporary.name)
+        self.assertEqual(self.root.state(),'withdrawn')
+
+    def test_startup_restores_local_cli_model_and_directory_with_explicit_workspace_priority(self):
+        config=Path(self.temporary.name)/'persisted-choice.json'
+        saved_workspace=Path(self.temporary.name)/'saved-learning'
+        selected={'providerId':'saved-provider','modelId':'saved-model/with/slashes'}
+        from picker_settings import PickerSettings
+        PickerSettings(config).save({'schemaVersion':1,'workspaceDir':str(saved_workspace),
+            'zcodeCli':'saved-cli','chromeExe':'','desktopBridgeFile':'','modelSelection':selected})
+        for explicit in (None,Path(self.temporary.name)/'explicit-learning'):
+            window=app.tk.Toplevel(self.root);window.withdraw()
+            window.after=lambda *_args,**_kwargs:None  # No timers beyond this constructor fixture.
+            revived=None
+            try:
+                revived=app.PickerApp(window,workspace_path=explicit,settings_path=config)
+                self.assertEqual(revived.zcode_path.get(),'saved-cli')
+                self.assertEqual(revived._model_selection,selected)
+                self.assertEqual(Path(revived.workspace_value),explicit or saved_workspace)
+                self.assertEqual(window.state(),'withdrawn')
+                self.assertFalse(revived._model_catalog_active,'Restart must not auto-run the backend')
+            finally:
+                if revived:revived.closed=True
+                window.destroy()
 
     def test_native_order_menu_freeze_and_expand_collapse_layout(self):
         picker = self.picker
@@ -485,7 +571,7 @@ class HiddenTkPaletteDpiTests(unittest.TestCase):
                 root.tk.call('tk', 'scaling', 96 / 72 * ratio)
                 picker = None
                 try:
-                    picker = app.PickerApp(root, workspace_path=Path(temporary))
+                    picker = app.PickerApp(root, workspace_path=Path(temporary),settings_path=Path(temporary)/'local-settings.json')
                     workspace = picker._workspace()
                     page = 'https://example.test/orders'
                     for capture_id in ('cap-long', 'cap-next'):
@@ -542,6 +628,28 @@ class HiddenTkPaletteDpiTests(unittest.TestCase):
                     picker._apply_fit(str(root))
                     collapsed_height = body.winfo_reqheight()
                     self.assertLess(collapsed_height, expanded_height)
+                    original=app.tk.Toplevel
+                    def hidden(*args,**kwargs):
+                        window=original(*args,**kwargs);window.withdraw();return window
+                    with patch.object(app.tk,'Toplevel',side_effect=hidden):picker.open_settings()
+                    picker.desktop_status.set('已连接 ZCode 桌面；学习空间：'+str(Path(temporary)/('native-learning/'*6)))
+                    picker._apply_fit(str(picker.settings_window));root.update_idletasks()
+                    settings_body=picker._layout_specs[str(picker.settings_window)][1]
+                    self.assertLessEqual(settings_body.winfo_reqheight(),safe_height,'Settings footer must fit the usable screen')
+                    self.assertEqual(picker.settings_window.state(),'withdrawn')
+                    picker.settings_window.destroy()
+                    picker.send_feedback.begin(picker._page_revision())
+                    picker.send_feedback.progress('native-processing','本轮处理中。',details={
+                        'transport':'desktop-native-bridge','nativeAccepted':True,'sessionId':'sess_dpi_navigation','uiOpened':True})
+                    picker.sending=True;picker._controls();root.update_idletasks();picker._apply_fit(str(root));root.update_idletasks()
+                    row=picker.receipt_button.master
+                    self.assertEqual(picker.receipt_button.winfo_y(),picker.view_zcode_button.winfo_y())
+                    self.assertLessEqual(picker.view_zcode_button.winfo_x()+picker.view_zcode_button.winfo_width(),row.winfo_width())
+                    self.assertLessEqual(row.winfo_reqwidth(),picker.palette_width)
+                    self.assertLessEqual(body.winfo_reqheight(),safe_height)
+                    picker.send_feedback.complete({'status':'completed','transport':'desktop-native-bridge','nativeAccepted':True,
+                        'nativeCompleted':True,'sessionId':'sess_dpi_navigation','uiOpened':True})
+                    picker.sending=False;picker._controls()
                     evidence.append({'dpi': round(ratio * 100), 'width': picker.palette_width,
                                      'expanded': expanded_height, 'collapsed': collapsed_height,
                                      'screenLimit': safe_height, 'viewport': picker.record_list.viewport_height()})

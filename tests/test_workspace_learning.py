@@ -44,7 +44,8 @@ class WorkspaceLearningTests(unittest.TestCase):
     def test_learning_uses_actual_endpoint_target_and_hashes_full_url_without_query_leak(self):
         bundle = self.export()
         payload = json.loads(Path(bundle['bundlePath']).read_text(encoding='utf-8'))
-        self.assertEqual(payload['taskIntent'], {'mode': 'learn-and-verify', 'contractVersion': 1})
+        self.assertEqual(payload['taskIntent'], {'mode': 'learn-and-verify', 'contractVersion': 1,
+                                                'actionPolicy': 'infer-from-purpose'})
         self.assertEqual(payload['connection'], {
             'endpoint': 'http://localhost:19333', 'targetId': 'current-selected-target',
             'page': page_identity(self.url), 'initialUrlSha256': hashlib.sha256(self.url.encode('utf-8')).hexdigest()})
@@ -77,6 +78,7 @@ class WorkspaceLearningTests(unittest.TestCase):
         self.assertTrue((directory / 'learning').is_dir())
         self.assertEqual(list((directory / 'learning').iterdir()), [])
         self.assertIn('先执行 inspect', context)
+        self.assertIn('taskIntent.actionPolicy=infer-from-purpose', context)
         self.assertIn('learning/learning-report.json', context)
         self.assertIn('learning/SKILL.md', context)
         self.assertIn('runner.json', context)

@@ -51,6 +51,74 @@ class SendFeedbackTests(unittest.TestCase):
         self.assertEqual(self.model.revision, self.FIRST)
         self.assertEqual(self.model.view()['elapsed'], 4)
 
+    def test_native_ack_and_open_are_processing_receipts_not_completion(self):
+        self.model.begin(self.FIRST)
+        event={'phase':'native-processing','transport':'desktop-native-bridge','nativeAccepted':True,
+               'sessionId':'sess_native_feedback','uiOpened':False,'requestId':'native-request',
+               'conversationTitle':'网页能力学习','internalToken':'PRIVATE_TOKEN'}
+        self.model.progress('native-processing','原生已接收。',details=event)
+        self.assertTrue(self.model.active)
+        self.assertEqual(self.model.view()['phase'],'native-processing')
+        self.assertIsNone(self.model.view()['completedAt'])
+        self.assertIn('尚未确认打开',self.model.view()['message'])
+        self.clock.advance(3)
+        self.model.progress('native-processing','原对话已打开。',details={**event,'uiOpened':True})
+        self.assertIn('已在 ZCode 打开',self.model.view()['message'])
+        self.assertNotIn('PRIVATE_',self.receipts.read_text(encoding='utf-8'))
+        restored=SendFeedback(receipt_path=self.receipts);restored.select(self.FIRST)
+        self.assertFalse(restored.active)
+        self.assertFalse(restored.can_send(self.FIRST))
+        self.assertTrue(self.model.can_detach_native())
+        self.assertIn('待核对',restored.view()['title'])
+        self.assertEqual(restored.view()['result']['sessionId'],'sess_native_feedback')
+        self.assertIsNone(restored.view()['completedAt'])
+
+    def test_native_completion_requires_own_terminal_evidence_and_does_not_invent_index_receipt(self):
+        evidence={'status':'completed','transport':'desktop-native-bridge','nativeAccepted':True,
+                  'nativeCompleted':True,'sessionId':'sess_native_completed','uiOpened':True,
+                  'responseSummary':'本轮已完成。'}
+        for missing in ('nativeCompleted','nativeAccepted','sessionId','uiOpened'):
+            model=SendFeedback();model.select(self.FIRST);model.begin(self.FIRST)
+            partial=dict(evidence);partial.pop(missing)
+            model.complete(partial)
+            self.assertEqual(model.view()['phase'],'unknown')
+        self.model.begin(self.FIRST);self.model.complete(evidence)
+        self.assertEqual(self.model.view()['phase'],'native-completed')
+        self.assertIn('已打开',self.model.view()['message'])
+        self.assertNotIn('indexRegistered',self.model.view()['result'])
+        restored=SendFeedback(receipt_path=self.receipts);restored.select(self.FIRST)
+        self.assertEqual(restored.view()['phase'],'native-completed')
+        self.assertFalse(restored.can_send(self.FIRST))
+
+    def test_known_native_terminal_failure_is_distinct_from_unknown_and_still_blocks_replay(self):
+        self.model.begin(self.FIRST)
+        self.model.complete({'transport':'desktop-native-bridge','status':'failed','nativeAccepted':True,
+            'sessionId':'sess_failed_native','nativeTerminal':True,'nativeOutcome':'failed','uiOpened':True,
+            'message':'原生本轮执行失败。'})
+        self.assertEqual(self.model.view()['phase'],'native-failed')
+        self.assertFalse(self.model.can_send(self.FIRST))
+        restored=SendFeedback(receipt_path=self.receipts);restored.select(self.FIRST)
+        self.assertEqual(restored.view()['phase'],'native-failed')
+        self.assertFalse(restored.can_send(self.FIRST))
+
+    def test_failure_after_native_acceptance_keeps_sid_and_never_offers_resubmission(self):
+        self.model.begin(self.FIRST)
+        self.model.progress('native-processing','已接收',details={
+            'transport':'desktop-native-bridge','nativeAccepted':True,'sessionId':'sess_accepted_before_loss','uiOpened':True})
+        self.model.fail('后续结果连接中断。',uncertain=False)
+        self.assertEqual(self.model.view()['phase'],'unknown')
+        self.assertEqual(self.model.view()['result']['sessionId'],'sess_accepted_before_loss')
+        self.assertFalse(self.model.can_send(self.FIRST))
+
+    def test_unpersisted_native_ack_cannot_satisfy_safe_detach_gate(self):
+        from unittest.mock import patch
+        self.model.begin(self.FIRST)
+        with patch.object(self.model,'_persist',side_effect=OSError('disk full')):
+            self.model.progress('native-processing','已接收',details={
+                'transport':'desktop-native-bridge','nativeAccepted':True,'sessionId':'sess_unpersisted','uiOpened':True})
+        self.assertFalse(self.model.can_detach_native())
+        self.assertFalse(self.receipts.exists())
+
     def test_success_keeps_terminal_feedback_and_freezes_elapsed(self):
         self.model.begin(self.FIRST)
         self.clock.advance(7)

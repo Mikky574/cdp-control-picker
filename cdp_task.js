@@ -54,6 +54,7 @@ function runCdpTask(task) {
   }
   const publicControl = located => { const {element, ...result} = located; return result; };
   try {
+    if (task.actionPolicy !== undefined && task.actionPolicy !== 'infer-from-purpose') return blocked('unsupported-action-policy', '页面动作策略无效，未执行动作。');
     if (location.href !== task.expectedLiveUrl) return blocked('page-changed', '检查后页面路由已经变化，未操作控件。');
     if (task.operation === 'inspect') return {status: 'completed', actionAttempted: false, controls: task.captures.map(item => publicControl(locate(item)))};
     if (task.operation === 'read-page') {
@@ -77,7 +78,7 @@ function runCdpTask(task) {
     const element = found.element;
     const action = task.action;
     const allowed = (item.capture.annotation || {}).allowedActions || [];
-    if (!allowed.includes(action)) return blocked('action-not-allowed', '控件标注没有允许此动作。');
+    if (task.actionPolicy !== 'infer-from-purpose' && (!Array.isArray(allowed) || !allowed.includes(action))) return blocked('action-not-allowed', '控件标注没有允许此动作。');
     const result = {action, captureId: item.captureId, actionDispatched: false, control: publicControl(found)};
     if (action === 'read') {
       result.text = element.matches('input,textarea,select,[contenteditable]') ? '' : compact(element.innerText || element.textContent, 1500);

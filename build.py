@@ -3,6 +3,7 @@ from pathlib import Path
 import argparse
 import hashlib
 import json
+import platform
 import subprocess
 import sys
 
@@ -19,7 +20,7 @@ icon = tool / 'assets' / 'app-icon.ico'
 if not icon.is_file():
     parser.error('Missing application icon: ' + str(icon))
 inputs = [path for path in tool.glob('*.py')] + [tool / 'page_picker.js', tool / 'cdp_task.js']
-inputs += [path for directory in ('assets', 'skills') for path in (tool / directory).rglob('*') if path.is_file()]
+inputs += [path for directory in ('assets', 'skills', 'zcode-extension') for path in (tool / directory).rglob('*') if path.is_file()]
 def source_digest(path):
     data = path.read_bytes()
     if path.suffix.lower() in {'.py', '.js', '.cs', '.md', '.txt', '.json', '.svg'}:
@@ -35,6 +36,7 @@ subprocess.run([
     '--add-data', str(tool / 'page_picker.js') + ';.',
     '--add-data', str(tool / 'cdp_task.js') + ';.',
     '--add-data', str(repository / 'skills') + ';skills',
+    '--add-data', str(tool / 'zcode-extension') + ';zcode-extension',
     str(tool / 'app.py'),
 ], check=True)
 if source_files != {path.relative_to(tool).as_posix(): source_digest(path) for path in sorted(inputs)}:
@@ -42,7 +44,9 @@ if source_files != {path.relative_to(tool).as_posix(): source_digest(path) for p
 executable = output / (args.name + '.exe')
 manifest = {'schemaVersion': 1, 'executable': executable.name,
             'executableSha256': hashlib.sha256(executable.read_bytes()).hexdigest(),
-            'handoffBackend': 'app-server-with-desktop-index',
+            'targetPlatform': sys.platform, 'buildMachine': platform.machine(),
+            'pythonVersion': platform.python_version(),
+            'handoffBackend': 'zcode-native-extension-host',
             'sourceFiles': source_files}
 (work / 'build-info.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 print('Build source hashes written to ' + str(work / 'build-info.json'))

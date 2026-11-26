@@ -4,7 +4,7 @@
 
 读取 `page-bundle.json`，不要从下面的示例复制端口、路径或页签：
 
-- `taskIntent`：`mode=learn-and-verify` 与执行约定版本。
+- `taskIntent`：`mode=learn-and-verify`、执行约定版本，以及新包的 `actionPolicy=infer-from-purpose`。策略来自页面包，不能通过在单个job中另写actionPolicy覆盖。
 - `connection`：实际 `endpoint`、精确 `targetId`、规范化页面身份 `page`、完整初始 URL 的 `initialUrlSha256`。指纹用于校验页面，不是业务参数，也不需要反解。
 - `runtime.command`：命令参数数组；冻结包通常只有 EXE 路径，源码运行可能是 Python 路径加 `app.py`。保留数组中的每个参数，不拼 shell 字符串。
 - `learning.directory`：本包的学习目录，`learning.skillRef` 是学习技能相对路径。相对路径都从页面包所在目录解析。
@@ -58,7 +58,11 @@
 }
 ```
 
-`action` 支持 `read`、`click`、`fill`、`select`、`check`，且必须包含在该控件的 `annotation.allowedActions` 中。`fill`、`select`的`value`是字符串；`check`的`value`是布尔值，明确要求勾选还是取消，不盲目切换；`read`、`click`不需要value。`purposeScope`仅可为`read-only`或`reversible`，用于说明本次动作已经判断的范围；这个字段本身不授予权限，不得为绕过限制把业务变更冒写成查询。缺少参数时报告具体缺项。
+`action` 支持 `read`、`click`、`fill`、`select`、`check`。包的actionPolicy为infer-from-purpose时，根据用途、当前任务及实时DOM类型选择动作，旧annotation.allowedActions不作门槛；旧包无策略时，动作仍必须包含在原allowedActions中。未知策略会在连接前阻断，不默认为新策略，也不通过修改旧包策略绕过原限制。
+
+`fill`、`select`的`value`是字符串；`check`的`value`是布尔值，明确要求勾选还是取消，不盲目切换；`read`、`click`不需要value。`purposeScope`仅可为`read-only`或`reversible`，用于说明本次动作已经判断的范围；这个字段本身不授予权限，不得为绕过限制把业务变更冒写成查询。缺少参数时报告具体缺项。两种策略都保留精确页签/路由、唯一定位、可见可用、敏感控件、实际DOM类型与参数校验。
+
+新策略参与交接内容身份和动作job执行身份，旧策略回执不能证明新策略已执行。同一job路径改变策略会阻断，不能复用旧完成回执或绕过未知结果；应通过采集器导出新的任务包，并先核对原动作是否已经发生。
 
 运行器使用包内候选重新定位；零匹配、多匹配、不可见、不可用、敏感输入或目标身份不符时，不猜坐标、不取第一项、不尝试其他浏览器。执行输入后不依赖原始输入值的回显；以运行器返回的校验信息及后续页面证据判断。
 

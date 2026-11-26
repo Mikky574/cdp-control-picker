@@ -86,8 +86,10 @@ def command_environment(command, inherited=None):
             for variable in ("ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE"):
                 if not environment.get(variable, "").strip():
                     environment[variable] = str(builtin.resolve())
-    elif executable.name.lower() in {"node", "node.exe"}:
-        environment["PATH"] = str(executable.parent) + os.pathsep + environment.get("PATH", "")
+    else:
+        environment.pop("ELECTRON_RUN_AS_NODE", None)
+        if executable.name.lower() in {"node", "node.exe"}:
+            environment["PATH"] = str(executable.parent) + os.pathsep + environment.get("PATH", "")
     return environment
 
 
@@ -108,25 +110,43 @@ def resolve_command(commandPath=None):
         bundle = _desktop_bundle(command[0])
         if bundle and (len(command) == 1 or Path(command[1]).resolve() != bundle):
             command.insert(1, str(bundle))
+        elif not bundle and Path(command[0]).name.lower() == 'zcode.exe' and (Path(command[0]).parent / 'resources' / 'app.asar').is_file():
+            raise RunnerError("所选桌面安装缺少捆绑 CLI；不能直接启动桌面程序充当后端。")
         return command
     if commandPath is None or not str(commandPath).strip():
-        # Prefer the installed desktop's CLI, not a hard-coded development tree.
-        candidates = [candidate for candidate in _installed_candidates() if _desktop_bundle(candidate)]
-        discovered = shutil.which("zcode")
+        # Respect the user's separately installed CLI before a desktop fallback.
+        # A broken PATH entry is reported, not silently replaced by another build.
+        discovered = shutil.which("zcode-cli") or shutil.which("zcode")
         if discovered:
-            candidates.append(Path(discovered))
-        commandPath = next((candidate for candidate in candidates if candidate.is_file()), None)
+            return resolve_command(discovered)
+        commandPath = next((candidate for candidate in _installed_candidates()
+                            if candidate.is_file() and _desktop_bundle(candidate)), None)
         if commandPath is None:
-            raise RunnerError("未找到 ZCode CLI，请选择 zcode.exe 或 zcode.cmd。")
-    path = Path(commandPath).expanduser().resolve()
+            raise RunnerError("未找到 ZCode CLI；请填写 PATH 中的 zcode-cli/zcode，或选择实际 CLI 的 cmd、exe、cjs 文件。")
+    selected = os.path.expandvars(str(commandPath).strip().strip('"'))
+    path = Path(selected).expanduser()
+    if not path.is_file():
+        found = shutil.which(selected)
+        if found:
+            path = Path(found)
+    path = path.resolve()
     if not path.is_file():
         raise RunnerError("所选 ZCode CLI 文件不存在。")
     bundle = _desktop_bundle(path)
     if bundle:
         return [str(path), str(bundle)]
+    if path.name.lower() == 'zcode.exe' and (path.parent / 'resources' / 'app.asar').is_file():
+        raise RunnerError("所选桌面安装缺少 resources/glm/zcode.cjs；不能将桌面程序直接作为后台 CLI 启动。")
+    if path.suffix.lower() in {'.cjs', '.mjs', '.js'}:
+        node = next((candidate for candidate in (path.parent / 'node.exe', path.parent / 'node')
+                     if candidate.is_file()), None)
+        node = node or shutil.which('node')
+        if not node:
+            raise RunnerError("已找到 CLI 脚本，但未找到 Node；请选择已有标准 CLI 包装器或将其 Node 加入 PATH。")
+        return [str(Path(node).resolve()), str(path)]
     if path.suffix.lower() not in {".cmd", ".bat"}:
         if os.name == "nt" and path.suffix.lower() != ".exe":
-            raise RunnerError("请选择 zcode.exe 或可解析的 zcode.cmd。")
+            raise RunnerError("请选择实际 CLI 的 exe、cmd、bat 或 cjs/js 入口。")
         return [str(path)]
     if path.stat().st_size > 65536:
         raise RunnerError("CLI 包装器过大，无法安全解析。")

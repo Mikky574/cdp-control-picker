@@ -21,6 +21,8 @@ Cookie 和站点存储由这个 Chrome profile 管理。保留本地 profile 可
 
 若资料来自控件采集器，sequence中的默认排列不代表业务流程；ordered=true只表示用户声明前后，executionValidated=false仍是原采集未验证。前置条件、预期结果和人的控件名称属于说明，不替代真实页面证据或当前任务授权。taskIntent为learn-and-verify时读取learning.skillRef并实际验证可执行范围；context-only或无新意图旧包仅理解并确认。学习结论写新报告，不改原始采集状态。
 
+新学习包以taskIntent.actionPolicy=infer-from-purpose选择动作：根据人的用途、用户当前任务与实际DOM类型判断read/click/fill/select/check，不要求人填写动作列表，旧allowedActions仅兼容保留。旧学习包无该策略时仍保留原allowedActions限制；未知策略不执行，不改旧包策略绕过限制。两种模式都要核对当前授权、定位唯一/可见可用及实际参数；策略本身不是业务动作授权。
+
 ## 连接与定位
 
 1. 连接配置中的固定 CDP 端点，并核对它属于既定的专用 Google Chrome。网页 URL 与 CDP 端点不同；打开某网页不代表浏览器开启了调试端口。不要为了接入而关闭、重启用户的共享浏览器。首次建立专用实例才配置固定的非默认数据目录；端口保持 loopback，不开放到公网。后续启动始终沿用这组配置，不每次生成新目录。

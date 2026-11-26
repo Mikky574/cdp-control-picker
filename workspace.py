@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import tempfile
 import threading
+import time
 from urllib.parse import urlsplit, urlunsplit
 import uuid
 
@@ -237,7 +238,18 @@ def atomic_write(path, text):
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        # Windows readers can briefly omit FILE_SHARE_DELETE. Retry only the
+        # atomic file replacement; no browser action or model request is retried.
+        delays = (0, .005, .01, .02, .04, .08)
+        for index, delay in enumerate(delays):
+            if delay:
+                time.sleep(delay)
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError as error:
+                if os.name != 'nt' or getattr(error, 'winerror', None) not in {5, 32, 33} or index == len(delays) - 1:
+                    raise
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -616,7 +628,8 @@ class Workspace:
         }
         if learning_connection:
             (directory / 'learning').mkdir()
-            bundle.update(taskIntent={'mode': 'learn-and-verify', 'contractVersion': 1},
+            bundle.update(taskIntent={'mode': 'learn-and-verify', 'contractVersion': 1,
+                                      'actionPolicy': 'infer-from-purpose'},
                           connection=learning_connection,
                           runtime={'command': list(runtime_command), 'requestFlag': '--cdp-task', 'outputFlag': '--output'},
                           learning={'directory': 'learning', 'skillRef': relative(learning_skill)})
@@ -647,8 +660,10 @@ class Workspace:
                        'connection.endpoint 是本次实际 CDP 地址，targetId 是当前明确选择的 Chrome 页签；'
                        'initialUrlSha256 校验起始 URL。它们不是 DOM id、控件编号、ZCode 会话编号或服务登录凭证。'
                        '只连接该既有专用 Chrome，不另开匿名浏览器；页签消失、身份或路由不符时说明阻断原因，不猜同址的其他页。\n\n'
-                       '先执行 inspect，记录连接和每项控件的真实唯一性、可见性、可用性证据。再按 annotation 的用途、允许动作、'
-                       '前置条件和预期结果，以及 sequence.ordered 声明的顺序尝试可明确判断为只读或可撤销的流程。'
+                       '先执行 inspect，记录连接和每项控件的真实唯一性、可见性、可用性证据。'
+                       'taskIntent.actionPolicy=infer-from-purpose 表示根据用途、实时 DOM 类型和当前任务判断动作；'
+                       '旧 annotation.allowedActions 仅兼容保留，不是新包的动作门槛或当前授权，不要求用户预先选择动作。'
+                       '再结合可选前置条件和预期结果，以及 sequence.ordered 声明的顺序尝试可明确判断为只读或可撤销的流程。'
                        '填写可能自动保存，click 也可能提交业务；涉及业务提交、删除、付款或动作性质不明时，需要具体的任务授权。'
                        '缺真实参数时列出参数，不能编造生产业务值；示例值只用于明确的演示环境。\n\n'
                        '每次只执行一个动作，用真实回读结果判断成功；超时或结果未知不要自动重发动作。不要把点击已发出当作业务完成。'

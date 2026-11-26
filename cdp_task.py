@@ -67,11 +67,14 @@ def _eval(client, expression):
     return value
 
 
-def _claim_action(source, job, learning):
+def _claim_action(source, job, learning, action_policy=None):
     directory = _inside(learning / '.executions', learning)
     directory.mkdir(parents=True, exist_ok=True)
     key = hashlib.sha256(os.path.normcase(str(source)).encode('utf-8')).hexdigest()
-    digest = hashlib.sha256(json.dumps(job, ensure_ascii=False, sort_keys=True,
+    # Preserve old claim hashes for legacy bundles. A new policy cannot reuse
+    # an old action receipt at the same job path or bypass an uncertain action.
+    identity = job if action_policy is None else {'job': job, 'actionPolicy': action_policy}
+    digest = hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True,
                                       separators=(',', ':')).encode('utf-8')).hexdigest()
     claim = directory / (key + '.claim')
     state_path = directory / (key + '.json')
@@ -141,10 +144,15 @@ def run_task(input_path, output_path, client_factory=CDPClient):
             raise TaskBlocked('unsupported-job', '只支持 schemaVersion=1 的 inspect、read-page 或 act 任务。')
         bundle = _read_object(bundle_path, 8 * 1024 * 1024)
         intent = bundle.get('taskIntent') or {}
-        if (bundle.get('kind') != 'annotated-controls-page-bundle'
+        if (bundle.get('kind') != 'annotated-controls-page-bundle' or not isinstance(intent, dict)
                 or intent.get('mode') != 'learn-and-verify' or type(intent.get('contractVersion')) is not int
                 or intent['contractVersion'] != 1):
             raise TaskBlocked('unsupported-intent', '此页面包未启用本版学习与验证任务。')
+        action_policy = intent.get('actionPolicy')
+        if 'actionPolicy' in intent and action_policy != 'infer-from-purpose':
+            raise TaskBlocked('unsupported-action-policy', '页面动作策略无效，未降级为旧策略或执行动作。')
+        if action_policy is not None:
+            result['actionPolicy'] = action_policy
         captures = bundle.get('captures')
         if (not isinstance(captures, list) or not captures or len(captures) > 256
                 or any(not isinstance(item, dict) or not isinstance(item.get('captureId'), str)
@@ -177,14 +185,14 @@ def run_task(input_path, output_path, client_factory=CDPClient):
                 raise TaskBlocked('invalid-action', '动作需要有效的已标注控件编号和支持的动作。')
             annotation = selected_capture['capture'].get('annotation')
             allowed = annotation.get('allowedActions') if isinstance(annotation, dict) else None
-            if not isinstance(allowed, list) or action not in allowed:
+            if action_policy is None and (not isinstance(allowed, list) or action not in allowed):
                 raise TaskBlocked('action-not-allowed', '该动作未包含在本控件标注允许的动作中。')
             value = job.get('value')
             if action in {'fill', 'select'} and (not isinstance(value, str) or len(value) > 4000):
                 raise TaskBlocked('missing-action-value', '填写或选择需要明确的字符串参数，不能猜测。')
             if action == 'check' and not isinstance(value, bool):
                 raise TaskBlocked('missing-action-value', '勾选需要明确 true 或 false，不能盲目切换。')
-            execution, duplicate = _claim_action(source, job, learning)
+            execution, duplicate = _claim_action(source, job, learning, action_policy)
             if duplicate is not None:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 atomic_write(destination, json.dumps(duplicate, ensure_ascii=False, indent=2) + '\n')
@@ -207,6 +215,8 @@ def run_task(input_path, output_path, client_factory=CDPClient):
         parameters = {'operation': operation, 'expectedLiveUrl': live_url,
                       'captures': captures, 'captureId': job.get('captureId'),
                       'action': job.get('action'), 'value': job.get('value')}
+        if action_policy is not None:
+            parameters['actionPolicy'] = action_policy
         script = SCRIPT.read_text(encoding='utf-8')
         expression = '(' + script + ')(' + json.dumps(parameters, ensure_ascii=True) + ')'
         # Once an action call is submitted, an exception is an uncertain result.

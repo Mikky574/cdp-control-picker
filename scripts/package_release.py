@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+from urllib.parse import urljoin, urlsplit
 from zipfile import ZIP_DEFLATED, ZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,9 +44,30 @@ def archive(path, entries):
     verify_zip(path, entries)
 
 
-def package(version, executable, build_info, output):
+def delivery_guide(data, version):
+    """Keep standalone guides cross-linked; resolve source docs against their tag."""
+    names = {'cdp-learning.html': 'CDP-Learning-Guide.html',
+             'deployment.html': 'Deployment-Guide.html'}
+    base = f'https://github.com/Mikky574/cdp-control-picker/blob/v{version}/docs/'
+    def link(match):
+        target = match.group(2)
+        parts = urlsplit(target)
+        if parts.scheme or parts.netloc or target.startswith('#'):
+            return match.group(0)
+        if parts.path in names:
+            resolved = names[parts.path] + ('?' + parts.query if parts.query else '') + ('#' + parts.fragment if parts.fragment else '')
+        else:
+            resolved = urljoin(base, target)
+        return match.group(1) + resolved + match.group(3)
+    return re.sub(r'''(href\s*=\s*["'])([^"']+)(["'])''', link, data.decode('utf-8')).encode('utf-8')
+
+
+def package(version, executable, build_info, output, release_version=None):
     if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?', version):
         raise ValueError('Use a semantic version such as 0.2.0.')
+    release_version = release_version or version
+    if not re.fullmatch(re.escape(version) + r'(?:-[A-Za-z0-9.-]+)?', release_version):
+        raise ValueError('Release version must match the app version, optionally with a prerelease suffix.')
     if git('status', '--porcelain').strip():
         raise RuntimeError('Commit the intended release source before packaging.')
     commit = git('rev-parse', 'HEAD').decode().strip()
@@ -80,20 +102,29 @@ def package(version, executable, build_info, output):
     usage = sources[usage_name]
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    stem = 'CDP-Control-Picker-v' + version
+    stem = 'CDP-Control-Picker-v' + release_version
     target = output / (stem + '.exe')
     if target != executable:
         shutil.copyfile(executable, target)
-    metadata = {**build, 'version': version, 'sourceCommit': commit,
-                'executable': target.name, 'delivery': 'Windows portable floating picker with background app-server and desktop-index adapter'}
+    metadata = {**build, 'version': release_version, 'appVersion': version,
+                'sourceTag': 'v' + release_version, 'prerelease': release_version != version, 'sourceCommit': commit,
+                'executable': target.name, 'delivery': 'Windows floating picker with native ZCode Extension Host connector and deployment skills'}
     metadata_bytes = (json.dumps(metadata, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
     (output / 'BUILD-INFO.json').write_bytes(metadata_bytes)
     (output / 'USAGE-zh-CN.txt').write_bytes(usage)
     inner = {target.name: binary, 'USAGE-zh-CN.txt': usage, 'BUILD-INFO.json': metadata_bytes}
-    guide = sources.get('docs/cdp-learning.html')
-    if guide:
-        inner['CDP-Learning-Guide.html'] = guide
-        (output / 'CDP-Learning-Guide.html').write_bytes(guide)
+    bridge_files = {'ZCode-Bridge/' + name.removeprefix('zcode-extension/'): data
+                    for name, data in sources.items() if name.startswith('zcode-extension/')}
+    inner.update(bridge_files)
+    guides = {}
+    for source_name, delivery_name in (('docs/cdp-learning.html', 'CDP-Learning-Guide.html'),
+                                       ('docs/deployment.html', 'Deployment-Guide.html')):
+        guide = sources.get(source_name)
+        if guide:
+            guide = delivery_guide(guide, release_version)
+            guides[delivery_name] = guide
+            inner[delivery_name] = guide
+            (output / delivery_name).write_bytes(guide)
     inner['SHA256SUMS.txt'] = ''.join(f'{digest(data)}  {name}\n' for name, data in sorted(inner.items())).encode('utf-8')
     portable = output / (stem + '.zip')
     archive(portable, inner)
@@ -102,11 +133,15 @@ def package(version, executable, build_info, output):
     skills_zip = output / (stem + '-skills.zip')
     archive(skills_zip, {name.removeprefix('skills/'): data for name, data in sources.items() if name.startswith('skills/')})
     assets = [target, portable, source_zip, skills_zip, output / 'USAGE-zh-CN.txt', output / 'BUILD-INFO.json']
-    if guide:assets.append(output / 'CDP-Learning-Guide.html')
+    assets.extend(output / name for name in guides)
+    if bridge_files:
+        bridge_zip = output / (stem + '-zcode-bridge.zip')
+        archive(bridge_zip, {**bridge_files, **guides})
+        assets.append(bridge_zip)
     checksums = output / 'SHA256SUMS.txt'
     checksums.write_text(''.join(f'{digest(path.read_bytes())}  {path.name}\n' for path in assets), encoding='utf-8', newline='\n')
     assets.append(checksums)
-    return {'version': version, 'commit': commit,
+    return {'version': release_version, 'appVersion': version, 'commit': commit,
             'assets': [{'path': str(path), 'name': path.name, 'size': path.stat().st_size,
                         'sha256': digest(path.read_bytes())} for path in assets]}
 
@@ -114,12 +149,13 @@ def package(version, executable, build_info, output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--version', required=True)
+    parser.add_argument('--release-version', help='Optional prerelease version; app and build input versions remain checked.')
     parser.add_argument('--exe', type=Path, required=True)
     parser.add_argument('--build-info', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--report', type=Path)
     args = parser.parse_args()
-    report = package(args.version, args.exe, args.build_info, args.output)
+    report = package(args.version, args.exe, args.build_info, args.output, args.release_version)
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')

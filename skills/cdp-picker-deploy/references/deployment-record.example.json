@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "recordPurpose": "部署记录及本技能生成器输入；采集器不会自动加载此文件。示例路径必须改为本机真实路径。只填路径与非秘密事实，不填凭据或配置正文。",
+  "paths": {
+    "pickerExe": "C:/Tools/CDP-Control-Picker/CDP-Control-Picker.exe",
+    "nodeExe": "C:/Tools/Node/node.exe",
+    "cliEntryScript": "C:/Tools/ZCode/apps/zcode-cli/packages/cli/dist/zcode.cjs",
+    "workspaceDir": "D:/CDP-Workspaces/Example"
+  },
+  "connection": {
+    "cdpEndpoint": "http://127.0.0.1:9222"
+  },
+  "pathEnvironment": {
+    "CDP_PICKER_DESKTOP_EXE": null,
+    "CDP_PICKER_DESKTOP_INDEX": null,
+    "CDP_PICKER_CLI_DATABASE": null,
+    "ZCODE_DATA_BASE_DIR": null,
+    "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE": null,
+    "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE": null,
+    "ZCODE_BUILTIN_PROVIDER_BUNDLED_CONFIG_FILE": null,
+    "TEMP": null,
+    "TMP": null
+  },
+  "inventory": {
+    "desktopExe": "填写实际桌面程序路径；此项只是记录，不修改adapter配置",
+    "desktopVersion": "填写实际ProductVersion；3.16.3.8992仅历史实测，3.18.2等按接口与必要schema能力检查，不按版本号拒绝",
+    "desktopIndexPath": "填写已核实tasks-index.sqlite路径；不复制数据库",
+    "cliSessionDbPath": "填写已核实CLI会话库路径；不读取无关会话正文",
+    "providerConfigPath": "只填路径与格式版本，不填Key或文件正文",
+    "chromeProfileDir": "填写固定专用profile路径；不复制登录资料",
+    "sourceCommit": "填写实际构建commit；预构建包则记录来源与哈希",
+    "cliVersion": "填写检测得到的版本，不照抄文档",
+    "verification": {
+      "checkedAt": null,
+      "doctor": "not-tested",
+      "appServerSessionList": "not-tested",
+      "modelTask": "not-tested",
+      "desktopConversationVisible": "not-tested",
+      "sameSessionContinuation": "not-tested",
+      "chromeCdp": "not-tested"
+    }
+  }
+}

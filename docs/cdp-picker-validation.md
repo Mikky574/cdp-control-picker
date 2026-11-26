@@ -1,3 +1,89 @@
+# v0.3.1-rc.1原生桌面接入验收（App0.3.1）
+
+本轮按RC候选交付，标为Prerelease且不替代0.3.0稳定Latest。源码、协议HTTP联立、成品归档与虚构CDP页面检查通过；原生ZCode安装/授权及真实GUI全链留待目标机验收，不把候选交付写成这些层级已通过。发布URL与资产回执由发布流程另验。
+
+| 验证层级 | 最终结果与范围 |
+|---|---|
+| Python完整suite | 330项运行，329通过，1项Windows真实symlink权限跳过，40.042秒 |
+| Node扩展综合测试 | tests/test_desktop_extension.mjs的1项综合通过；真实Node HTTP服务与fake官方Host，不是实际GUI或MessagePort连接 |
+| JS与技能 | page_picker.js、cdp_task.js语法检查通过；4份技能validate全部通过 |
+| 冻结EXE/实际归档 | EXE 13,952,025字节，14关键模块与25资源hash匹配；完整哈希见随包BUILD-INFO/SHA256SUMS |
+| 包自检 | 原生桥、持久设置及同源模型目录标记正确；requestedPermissionMode=yolo，nativePermissionVerified=false；自检不打开窗口、连浏览器或调用模型 |
+| 最终EXE真实CDP虚构页 | locate两个控件、填写、查询1次并回读，businessWrites=0；重复act.executedNow=false，自有页签已关闭；该项没有模型参与 |
+| 原生桥HTTP协议联立 | 真实Node扩展activate＋fake官方Host＋真实Python Bridge/Handoff；create1/open1/wait2/read2，首条虚构控件摘要回显、公开回复过滤及两层去重通过，无二次create |
+| 冻结EXE只读桌面检查 | --desktop-check退出0，health/models联立通过，模拟目录modelCount=1；无grant/create/模型请求或GUI操作 |
+| 原生安装/授权/GUI | 本机未安装桥、未完成原生grant；用户另一台3.18.2电脑不可远程访问，没有该机真实GUI验收 |
+| RC分发 | App版本0.3.1，分发tag为v0.3.1-rc.1；正式v0.3.1留待目标机验收，RC不设Latest |
+
+HTTP联立是跨进程真实客户/协议层验证，不只是纯单元；Host的授权、会话与模型响应为模拟，realGUIObserved=false、realModelCalls=0、realChromeConnected=0、realZCodeStarted=0。它与上表独立的真实CDP虚构页检查分别报告，不能合并成真实ZCode GUI全链通过。测试Node已正常退出、自己的发现文件已移除。
+
+真实安装须“安装连接桥”→ZCode命令中心“重新加载扩展”一次→“连接并授权”，日常不重复安装/重载/重启。接口按能力检查，无桌面版本白名单；请求yolo或FakeHost授权true都不是实际权限回读。
+
+持久配置只含资料/程序/发现文件路径及providerId/modelId，不含凭据。资料目录可与扩展专属native项目不同，旧资料不搬；真实Composer模型列表、导航和实时消息仍需目标机观察。
+
+原生已接纳且本机处理中回执落盘后，可关闭采集器而不终止ZCode-owned任务，只释放采集连接；安装中或未接纳仍等待。“在 ZCode 查看”只导航已确认原SID，不重新首发、不改历史回执。源码/隐藏Tk相关回归包含在完整suite，不能替代实际GUI。
+
+原生SID、桥token、完整轨迹与私有路径不进入本文；不把HTTP模拟、资源标记或此前CLI模型轨迹说成当前真实原生对话已验收。
+
+## 以下是此前CLI/index候选证据（不是当前原生桌面结果）
+
+# 0.3.1统一版验收记录
+
+本轮已完成一轮源码测试、冻结候选归档、独立CLI检测，以及新策略无模型流程和真实模型学习/索引交接。之后只调整了索引能力兼容登记，最终全量与重构建待回执。以下按证据层级分别记录，不填入继承版数字或已发布声明。
+
+| 本轮项目 | 待填证据 |
+|---|---|
+| 完整suite | 已完成一轮265项运行，264通过、1项Windows真实symlink权限跳过，31.120秒；含部署位置覆盖与真实Windows文件锁回归，兼容策略更新后全量待最终回执 |
+| 单行UI/Chrome/持久反馈/隐藏动作选择 | 对应源码测试通过、成品标记正确；不是最终可见窗口验收 |
+| 新策略与兼容 | 策略/旧包/去重回归包含在完整suite；最终EXE新策略无模型实测见下节 |
+| CLI自动与显式入口 | 安全解析回归通过；实际独立Node CLI 0.16.9见下节，不推广全部CLI版本 |
+| 检测后端 | 真实生成启动器＋冻结EXE的stdio/session/list通过，无模型/新会话/索引写入 |
+| 新CLI及推断策略真实模型任务 | 上一冻结候选完整学习/查询回读通过，registered/indexRegistered=true；未现场观察GUI，新增索引能力后待最终回归 |
+| 冻结候选 | 上一候选11核心模块与20资源hash匹配，4技能齐全，实际归档通过；包检查无窗口/浏览器/模型，新索引能力后待重构建 |
+| 部署技能 | 生成器9项路径用例通过，真实生成启动器的冻结EXE后台检测通过；不是实际自动安装软件验收 |
+| 索引能力兼容变更 | 以API、必需字段/约束和本地身份判断；官方新库登记方式已查证，fixture、最终全量与重构建待回执，不替代真实GUI验收 |
+| 统一main与发布 | 实际提交/分支合并、tag、资产与哈希回执 |
+
+跨进程测试暴露Windows状态文件被读时replace短暂失败，已真实复现并增加仅针对文件共享错误的有限重试，总计155ms；不重发浏览器动作或模型。真实Windows读锁、永久错误2项回归通过；两进程同一步骤压力40次、20.383秒全部通过，每次只派发1次。上述265项完整suite已包含文件锁及部署位置覆盖回归；后续兼容探测变更另等最终回执。
+
+## 0.3.1成品、无模型页面流程与部署生成器
+
+上一冻结候选EXE为13,877,111字节。实际归档中11核心模块、20资源hash均与预期一致，4份技能包含新增部署技能；单行、用途推断、隐藏动作、PATH优先与后台检测标记正确。包检查openedWindow=false、connectedBrowser=false、automaticModelCalls=false。完整哈希以随包BUILD-INFO/SHA256SUMS为准，不在本文重复固定值；新增索引能力后的包另验。
+
+随后直接使用这份候选EXE的无GUI任务入口，在现有Chrome中新建本次自有虚构页，给新actionPolicy并故意保留旧allowedActions=['read']。真实填写、点击、查询回读通过，独立计数为查询1次、业务写入0；重复act回执executedNow=false，没有再次派发。完成后仅关闭自建页，不重启共享Chrome。这证明新策略不会被旧动作字段拦住，并验证本地运行器；该项没有调用模型，与后续真实模型试验分别记录。
+
+部署生成器另有9项路径用例通过，只生成3份启动器，不自动安装依赖或改凭据。父流程实际使用新生成wrapper与冻结EXE的backend-check连通独立Node CLI 0.16.9，app-server stdio/session/list通过，无模型调用、会话创建或桌面索引写入。环境记录JSON是说明文件，不是程序自动配置；CLI数据库覆盖只供适配器核对已有真实库，不改变CLI自身存储位置。
+
+## 0.3.1独立CLI连通实测
+
+版本记录：本轮验收机默认GUI为3.16.3.8992、独立CLI为0.16.9；用户的3.18.2位于另一台不可访问电脑，因此没有其真实GUI验收。版本不作硬门槛，按实际CLI API、索引所需字段/约束与本地身份兼容探测；不要求降级，不将源码或fixture等同于GUI实测。
+
+本机PATH中的独立CLI包装入口被解析为其Node运行时与CLI入口；CLI版本0.16.9。实际app-server --stdio连接成功并只读session/list，检测回执为ready，transport=app-server-stdio、appServerConnected=true、modelCalled=false、sessionCreated=false、indexWritten=false。
+
+这项检测没有发prompt、调用模型或改桌面索引，只证明本次独立CLI的后台通道与会话列表协议可用。不证明完整学习任务、模型认证或桌面对话可见性。具体安装路径留在本机报告，不进入仓库。
+
+## 0.3.1上一候选的真实模型全链路
+
+独立Node CLI 0.16.9通过app-server调用模型，使用上一冻结候选EXE实际inspect、填写、点击查询并回读。任务明确为infer-from-purpose，同时保留旧allowedActions=['read']兼容字段；精准连接本次自有虚构页，查询结果核对通过。独立计数为查询1次、业务写入0，学习目录保留验证报告、页面约定、技能、参数化runner及逐步请求/回执。
+
+真实模型报告status=passed、handoffStatus=registered、indexRegistered=true、queryReadbackVerified=true；未新建浏览器，完成后只关闭自建页。它证明该候选的独立CLI、新策略、CDP运行器和索引登记贯通，不是仅靠模型声称成功。没有现场观察桌面GUI，也不推广为任意真实网站通过；本轮未公开SID、真实安装路径、完整轨迹或会话内容。后续索引能力变更通过单元回归及新构建另验，不把这次模型轨迹说成变更后重新运行。
+
+## 官方索引能力对照与后续变更
+
+网上核对了官方v3.18.2的[索引基线](https://github.com/zai-org/ZCode/blob/v3.18.2/packages/services/src/project-storage/schema.baseline.sql)及[任务归属登记实现](https://github.com/zai-org/ZCode/blob/v3.18.2/packages/services/src/task-groups/repository.ts)。新库中的任务归属与根目录顺序按结构能力处理；普通任务不应凭空创建任务组。
+
+适配器据此对本次新任务按可用能力补充admissions/root-order登记，保留既有任务组和排序。兼容按实际必需字段、约束与本地身份探测，不因版本号拒绝兼容结构；破坏性缺项才明确阻断。该变更的fixture、最终全量和重构建待最终回执，官方源码比对不是用户另一台电脑的实际GUI验收。
+
+## 继承的0.3.0证据（不是本轮结果）
+
+0.3.0本地发布回执tag=v0.3.0、draft=false、提交f7d5598，8个资产哈希与发布目录一致；BUILD-INFO的25个输入与干净源码匹配，模型测试调用的运行器与发布EXE同哈希。
+
+该版234项运行、233通过、1项Windows真实symlink权限跳过；后台真实模型在现有Chrome中新建虚构页，按已给定演示值与说明完成检查/填写/查询/回读，独立服务查询0→1、业务写入0。工具轨迹62项completed（Read15/Bash21/TodoWrite2/Write11/Edit13），learning/保存21个文件，同act重复回执executedNow=false。
+
+它证明0.3.0已明确输入和动作约定的本地演示路线；不证明0.3.1新推断策略、独立CLI、新GUI条目或任意真实站点已通过。0.3.0当轮未另行观察桌面GUI，新版包资源检查与隐藏Tk也不是最终可见窗口验证。
+
+## 以下保留原版历史
+
 # CDP学习验证版验收记录
 
 核对日期：2026-11-26。v0.3.0在独立学习分支构建，保留窄窗和持续反馈改动；下文原0.2.x段落仅是当时历史。

@@ -1,0 +1,13 @@
+{
+  "name": "cdp-picker-local",
+  "description": "CDP 控件采集器随包交付的本地连接桥。",
+  "plugins": [{
+    "name": "cdp-picker-bridge",
+    "displayName": "网页能力学习",
+    "version": "0.3.1",
+    "description": "在 ZCode 原生对话中接收控件学习任务，支持即时导航、进度和继续交流。",
+    "category": "productivity",
+    "author": { "name": "CDP Control Picker", "url": "https://github.com/Mikky574/cdp-control-picker" },
+    "source": "./cdp-picker-bridge"
+  }]
+}

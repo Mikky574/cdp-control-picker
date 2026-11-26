@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CDP控件采集器：下载、依赖与位置设置</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f4f6fb;color:#192b46;font:16px/1.8 system-ui,"Microsoft YaHei",sans-serif}main{max-width:1100px;margin:auto;padding:48px 28px}h1{font-size:clamp(30px,4vw,44px);line-height:1.3}h2{font-size:24px;margin:0 0 12px}h3{font-size:18px}.lead{max-width:850px;font-size:19px;color:#596c86}p,li{color:#596c86}a{color:#245ac0}section,.note{background:#fff;border:1px solid #dfe6f0;border-radius:16px;padding:24px;margin:22px 0}.head{display:flex;align-items:baseline;gap:12px}.num{flex:none;display:inline-grid;place-items:center;width:34px;height:34px;border-radius:50%;color:#245ac0;background:#eaf1ff;font-weight:700}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.tile{background:#f5f7fa;padding:18px;border-radius:12px}.tile h3{margin:0}.note{border-left:5px solid #d19a37}.good{border-left-color:#168979}.table{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:15px}th,td{text-align:left;vertical-align:top;padding:12px;border-bottom:1px solid #dfe6f0}th{color:#192b46;background:#f5f7fa}.path{overflow-wrap:anywhere;font-weight:600;color:#245ac0}.placeholder{border:2px dashed #b7c8e3;background:#f5f7fa;border-radius:12px;padding:22px;margin-top:18px}.placeholder strong{color:#4569aa}.placeholder p{font-size:14px;margin:6px 0}.foot{font-size:14px}a:focus-visible{outline:3px solid #168979;outline-offset:4px}@media(max-width:760px){main{padding:26px 16px}section,.note{padding:18px}.grid{grid-template-columns:1fr}}@media print{body{background:white}main{padding:0}.placeholder,section,.note{break-inside:avoid}a{color:inherit}}
+</style></head><body><main>
+<p>CDP CONTROL PICKER · 原生桌面接入说明 · 0.3.1-rc.1 预发布候选（App 0.3.1）</p>
+<h1>一个固定学习项目，对话和资料都找得到。</h1>
+<p class="lead">采集器标注网页，ZCode里的“网页能力学习”扩展负责创建原生对话。你在桌面继续同一会话；资料可以集中到学习空间，也可以保存在自己选择的目录。</p>
+<aside class="note"><strong>首次需要三步设置，日常不用反复重启。</strong><p>首次安装流程已实现，源码、HTTP协议联立与成品检查已通过，真实原生安装/授权及GUI留待目标机验收。按下方按钮与命令中心操作，不把旧CLI结果说成原生桌面已通过。版本不作白名单，缺能力明确提示，不自动升级ZCode。</p></aside>
+<section><div class="head"><span class="num">1</span><h2>准备Chrome、ZCode和随包扩展</h2></div>
+<p>完整解压采集器到可写目录。Chrome提供你已登录的网页；ZCode需要相应Extension Host能力。使用已有可用安装，下载来源见<a href="https://zcode.z.ai/cn/docs/install">ZCode官方安装说明</a>，不为固定版本门槛要求升级或降级。</p>
+<p>先在设置点“安装连接桥”；安装器只处理随包插件，不安装或升级ZCode。然后到ZCode命令中心执行一次“重新加载扩展”，无需退出App；回设置点“连接并授权”，在ZCode原生界面批准会话写入和完全访问。软件不会代点或绕过。日常不重复安装、重载或重启，有效授权继续沿用。</p>
+<div class="placeholder" role="note"><strong>截图占位 A · 扩展与原生授权</strong><p>补拍“安装连接桥”结果、ZCode命令中心的“重新加载扩展”和首次权限页。应看见会话写入/完全访问范围；不要截账号、其他项目或认证信息。此框不是实际界面截图，不能用画图伪造已授权。</p></div></section>
+<section><div class="head"><span class="num">2</span><h2>确定长期资料目录，看清学习项目目录</h2></div>
+<p>推荐集中使用一个学习项目。扩展自动维护自己的固定项目，连接后报告真实位置；在设置“学习工作区”页签的“学习/记录目录”选择长期文件夹，新默认为Documents中的CDP-Picker-Learning；也可点“使用 ZCode 学习空间”与它对齐。不要每次发送换一个目录。</p>
+<div class="table"><table><thead><tr><th>你看到的项目</th><th>里面是什么</th><th>需要注意</th></tr></thead><tbody>
+<tr><td>资料目录</td><td>控件标注、发送快照、每包的学习结果、本地交接与日志</td><td>可自行选择；切换不会自动搬旧资料。</td></tr>
+<tr><td>ZCode学习项目</td><td>原生对话使用的固定项目身份与工作目录</td><td>由扩展报告；资料另放时，两者不是同一目录。</td></tr>
+<tr><td>本次页面包</td><td>发送时的全部控件、用途、顺序，以及该包的学习报告/技能/步骤</td><td>旧包保持快照，不被后续编辑覆盖。</td></tr>
+<tr><td>Chrome专用资料</td><td>浏览器登录和网站状态</td><td>与学习资料分开；过期回同一Chrome重新登录，不导出凭据。</td></tr>
+<tr><td>ZCode原生聊天</td><td>原生会话和历史，由ZCode管理</td><td>不保证完整聊天都在资料目录，不能只复制资料当作完整备份。</td></tr>
+</tbody></table></div>
+<p>资料与项目不同也可以发送，任务会明确引用资料的绝对位置。移动程序、改资料目录和迁移原生项目/会话是三件事；当前切换不搬旧标注，更不复制数据库或偷偷改历史身份。</p>
+<div class="placeholder" role="note"><strong>截图占位 B · 两个目录对照</strong><p>补拍设置中“资料目录”与连接返回的“ZCode学习空间”，以及“使用 ZCode 学习空间”入口。裁到字段即可；遮住用户名和其他路径。若不相同，保留能说明差别的文件夹名称。</p></div></section>
+<section><div class="head"><span class="num">3</span><h2>连接桌面，再选择已有模型</h2></div>
+<p>连接成功先表示原生桥可用，不表示已经发起学习。模型列表从当前桌面读取，与ZCode同源；读取列表不临时新建聊天。到“ZCode 桌面与模型”点“刷新模型”，选择服务商和“本会话模型”，或保留“跟随后端当前模型”。每次发送使用真实模型身份，不改全局默认；最后点“保存并完成”，下次沿用路径和选择，不保存密钥。</p>
+<p>模型账号、API key和provider配置仍在ZCode的受支持入口设置；采集器只保存路径、模型选择等非秘密信息，不要求你复制Key。桥未就绪就明确报错，不把CLI连通冒充桌面接入。</p>
+<div class="placeholder" role="note"><strong>截图占位 C · 原生连接和模型列表</strong><p>补拍实际连接结果、学习空间和当前模型选择。模型名称/编号可以保留；账号、Key、认证token及发现文件内容必须遮住。未实际连接时不画“成功”截图。</p></div></section>
+<section><div class="head"><span class="num">4</span><h2>在专用Chrome保存控件用途</h2></div>
+<p>主窗点“启动 Chrome”，在该浏览器登录网站。刷新选页并开启采集，网页右键需要的控件，保存名称、用途、条件与预期结果。每项只占一行，编辑才看详情，“⋯”删除/排序。</p>
+<p>无需预先勾选读取、填写或点击。新任务让AI根据用途与当前控件判断；勾选“按此顺序操作”只表示你的声明，不代表已经执行验证。</p>
+<div class="placeholder" role="note"><strong>截图占位 D · 只采虚构控件示例</strong><p>补拍两条虚构控件行和网页标注框。应看到名称与用途；不包含真实账号、订单、地址或输入值。网页只裁目标附近。</p></div></section>
+<section><div class="head"><span class="num">5</span><h2>发送后，立即定位原生对话</h2></div>
+<div class="grid"><article class="tile"><h3>创建并单次首发</h3><p>ZCode本身创建并单次首发，返回真实会话和本次操作；不等任务结束再补列表条目。</p></article><article class="tile"><h3>受理后请求打开</h3><p>发送受理后立即请求导航到这次会话，再持续等待这个操作，运行中和终态都归属同一会话。</p></article></div>
+<p>到ZCode的“网页能力学习”专属项目找本次任务。先核对项目真实目录，再看任务；同名文件夹不一定是同一项目。采集器的资料目录如果另选，不能拿它替代原生项目位置。</p>
+<p>首条消息可直接看到网页标题、脱敏地址和控件用途摘要，AI仍要读完整资料。ZCode标题可能自行生成，以这次打开的原生会话为准，不只凭标题猜。摘要里的顺序是你的声明，不是已执行记录。</p>
+<div class="placeholder" role="note"><strong>截图占位 E · 实际找到这次任务</strong><p>补拍ZCode专属项目、当前任务和采集器导航回执。应能证明同一虚构任务；遮住其他历史和会话编号。未观察到时保留占位，不用一条记录冒充可见对话。</p></div></section>
+<section><div class="head"><span class="num">6</span><h2>区分“已受理”“已打开”和“正在直播”</h2></div>
+<div class="table"><table><thead><tr><th>证据</th><th>实际含义</th></tr></thead><tbody>
+<tr><td>连接成功</td><td>桌面桥可通信，尚不证明任务已发送。</td></tr>
+<tr><td>发送受理</td><td>已有本次操作，尚不证明任务完成。</td></tr>
+<tr><td>原生导航回执</td><td>按回执确认打开请求；真正看到会话还要看GUI。</td></tr>
+<tr><td>处理中/完成/失败</td><td>采集器持久跟踪同一操作，不因刷新Chrome消失。</td></tr>
+<tr><td>桌面实时消息</td><td>要在当前build实际看到同步；不能凭记录已写就承诺直播。</td></tr>
+</tbody></table></div>
+<p>确认原生会话后，主窗“在 ZCode 查看”可在运行中或完成后打开原对话，只导航，不重新发送或改写历史回执。看不到时先检查当前学习项目和会话，不重复发送或换目录创建另一份。结果未知保留原会话/操作先查询；软件不能把桥未就绪显示成GUI成功。实际同步和热加载范围见<a href="cdp-picker-validation.md">验证记录</a>。</p></section>
+<section><h2>什么时候可以关闭采集器</h2><p>原生已接纳、且本机处理中回执保存后，可以关闭采集器；ZCode任务继续，只释放采集连接，Chrome不会关闭。保持ZCode和Chrome运行。安装中或尚未接纳时仍需等待；关闭采集器不是中断任务，要停止请在ZCode操作。</p></section>
+<section><h2>CLI：首次插件安装与兼容诊断</h2><p>首次“安装连接桥”需要有插件管理能力的CLI，可用桌面捆绑入口或独立安装；日常会话由原生桌面驱动。独立CLI也可诊断本地后台：自动优先PATH，再回退捆绑入口，版本只记录、真实协议决定连通。CLI/索引结果不能代替原生对话打开或实时消息。</p><p>普通独立CLI脚本需要配套Node与完整相邻资源，部署AI可按技能核对安装和路径。采集器成品自身不需Python；辅助生成器只生成启动器，不安装扩展或绕过权限。</p></section>
+<p>给AI部署：读取<a href="../skills/cdp-picker-deploy/SKILL.md">部署技能</a>。学习原理见<a href="cdp-learning.html">图解说明</a>，当前未验范围见<a href="known-issues.md">限制</a>。桥token、凭据、profile、私人对话与日志留在本机，不进入任务或发布包。</p>
+<p class="foot">所有截图框都是待补拍占位。首次安装需重载扩展一次，日常不用重启。本RC的真实原生安装/授权及GUI全链待目标机验收，不替代0.3.0稳定版；不用示意图伪装成功。</p>
+</main></body></html>

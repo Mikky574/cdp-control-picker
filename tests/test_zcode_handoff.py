@@ -5,13 +5,297 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from workspace import Workspace, page_identity
-from zcode_handoff import (HandoffError, ZCodeHandoff, inspect_handoff, read_handoff,
-                           workspace_lock, _response_summary)
+from zcode_handoff import (HandoffError, ZCodeHandoff, inspect_handoff as native_inspect_handoff, read_handoff,
+                           workspace_lock, _response_summary, _visible_controls_summary)
+from desktop_bridge import DesktopBridgeError
+
+
+def inspect_handoff(workspace, bundle, **kwargs):
+    """The original test group explicitly injects the historical CLI backend."""
+    return native_inspect_handoff(workspace, bundle, transport='app-server-stdio', **kwargs)
+
+
+class FakeNativeBridge:
+    def __init__(self, root):
+        self.root = root
+        self.calls = []
+        self.authorized = True
+        self.opened = True
+        self.outcomes = ['running', 'completed']
+        self.problem = None
+        self.prompt = None
+        self.on_wait = None
+
+    def health(self):
+        self.calls.append(('health', None))
+        return {'nativeSessions': True, 'authorized': self.authorized,
+                'transport': 'zcode-extension-host', 'workspacePath': str(self.root/'native-project')}
+
+    def model_reference(self, selection):
+        self.calls.append(('model', selection))
+        return None if selection is None else selection['providerId']+'/'+selection['modelId']
+
+    def create_session(self, prompt, **params):
+        self.calls.append(('create', params))
+        self.prompt = prompt
+        session = {'kind':'app','sourceServerId':'local','workspacePath':str(self.root/'native-project'),
+                   'sessionId':'sess_native_fixture'}
+        self.created = {'requestId':params['request_id'],'creation':'created','firstInput':'accepted',
+                        'delivery':'start_now','session':session,
+                        'operation':{'session':session,'sessionId':session['sessionId'],'commandId':'command-fixture'}}
+        if self.problem == 'optional-source':
+            session.pop('sourceServerId')
+        if self.problem == 'rejected':
+            return {'requestId':params['request_id'],'creation':'rejected','firstInput':'rejected','delivery':'none'}
+        if self.problem == 'unknown':
+            return {**self.created,'creation':'unknown','firstInput':'unknown','operation':None}
+        if self.problem == 'wrong-id':
+            return {**self.created,'requestId':'another-request'}
+        if self.problem in {'not-granted','not-declared','incompatible'}:
+            raise DesktopBridgeError('fixture precondition',code=self.problem,definite_rejection=True)
+        if self.problem in {'lost-ack','lost-ack-pending'}:
+            raise DesktopBridgeError('fixture timeout',code='transport_unknown')
+        return self.created
+
+    def receipt(self, request_id):
+        self.calls.append(('receipt', request_id))
+        return ({'status':'accepted','result':self.created} if self.problem=='lost-ack' else {'status':'pending'})
+
+    def open_session(self, session_id):
+        self.calls.append(('open', session_id))
+        return {'status':'opened' if self.opened else 'unavailable'}
+
+    def wait_operation(self, operation, **kwargs):
+        self.calls.append(('wait', operation))
+        if self.on_wait:
+            self.on_wait()
+        outcome = self.outcomes.pop(0) if len(self.outcomes)>1 else self.outcomes[0]
+        row = {'operation':operation,'epoch':'fixture-epoch','revision':2,'status':outcome}
+        if self.problem == 'wrong-operation':
+            row['operation']={**operation,'commandId':'another-command'}
+        elif self.problem == 'legacy-flat-wait':
+            row = {**operation,'epoch':'fixture-epoch','revision':2,'status':outcome}
+        return {'status':'completed' if outcome in {'completed','failed','interrupted'} else 'timed_out', 'operations':[row]}
+
+    def read_session(self, session_id):
+        self.calls.append(('read', session_id))
+        return {'view':'messages','session':self.created['session'], 'messages':[
+            {'id':'user-1','role':'user','text':self.prompt},
+            {'id':'assistant-1','role':'assistant','text':'已收到本页控件，等待补充。'},
+            {'id':'user-2','role':'user','text':'A later unrelated user turn'},
+            {'id':'assistant-2','role':'assistant','text':'UNRELATED_REPLY_MUST_NOT_APPEAR'}]}
+
+
+class NativeDesktopHandoffTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory(prefix='picker-native-handoff-')
+        self.root=Path(self.temp.name)
+        self.workspace=Workspace(self.root)
+        self.workspace.save_capture({'page':{'url':'https://example.test/orders'},
+            'control':{'tagName':'button','text':'查询'},'annotation':{'description':'查询订单'}})
+        self.bundle=self.workspace.export_page_bundle('https://example.test/orders')
+        self.bridge=FakeNativeBridge(self.root)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def handoff(self, **kwargs):
+        return ZCodeHandoff(self.root, bridge_factory=lambda *args,**values:self.bridge,
+                            timeout_seconds=1,**kwargs)
+
+    def test_host_accepts_and_opens_before_wait_without_cli_or_private_index(self):
+        events=[]
+        before=Path(self.bundle['bundlePath']).read_bytes()
+        def during_wait():
+            early=[event for event in events if event['phase']=='native-processing']
+            self.assertGreaterEqual(len(early),2)
+            self.assertFalse(early[0]['uiOpened'])
+            self.assertTrue(early[1]['uiOpened'])
+            self.assertEqual(early[1]['sessionId'],'sess_native_fixture')
+            state=read_handoff(self.root,early[1]['requestId'])
+            self.assertEqual(state['status'],'native-processing')
+            self.assertTrue(state['nativeAccepted'])
+        self.bridge.on_wait=during_wait
+        with patch('zcode_handoff.resolve_command',side_effect=AssertionError('native must not discover CLI')):
+            result=self.handoff().send(self.bundle,events.append)
+        self.assertEqual(result['status'],'completed')
+        self.assertTrue(result['nativeCompleted'])
+        self.assertTrue(result['uiOpened'])
+        self.assertNotIn('indexRegistered',result)
+        self.assertIn(str(Path(self.bundle['contextPath'])),self.bridge.prompt)
+        self.assertNotEqual(result['workspace'],result['nativeWorkspace'])
+        self.assertNotIn('UNRELATED_REPLY',result['responseSummary'])
+        self.assertEqual(Path(self.bundle['bundlePath']).read_bytes(),before)
+        methods=[call[0] for call in self.bridge.calls]
+        self.assertLess(methods.index('create'),methods.index('open'))
+        self.assertLess(methods.index('open'),methods.index('wait'))
+        self.assertEqual(methods.count('create'),1)
+
+    def test_native_identity_does_not_reuse_legacy_cli_receipt_and_exact_repeat_is_cached(self):
+        legacy_fingerprint=inspect_handoff(self.root,self.bundle)['fingerprint']
+        result=self.handoff().send(self.bundle)
+        self.assertNotEqual(result['fingerprint'],legacy_fingerprint)
+        view=native_inspect_handoff(self.root,self.bundle)
+        self.assertFalse(view['canSubmit'])
+        self.assertEqual(view['previous']['sessionId'],result['sessionId'])
+        before=len(self.bridge.calls)
+        repeated=self.handoff().send(self.workspace.export_page_bundle('https://example.test/orders'))
+        self.assertTrue(repeated['duplicate'])
+        self.assertEqual(len(self.bridge.calls),before)
+
+    def test_model_project_and_selected_connection_enter_native_content_identity(self):
+        base=native_inspect_handoff(self.root,self.bundle)['fingerprint']
+        selected={'providerId':'demo','modelId':'model/with/slash'}
+        model=native_inspect_handoff(self.root,self.bundle,modelSelection=selected)['fingerprint']
+        connection=native_inspect_handoff(self.root,self.bundle,discovery_path=self.root/'other.json')['fingerprint']
+        project=native_inspect_handoff(self.root,self.bundle,project_ref={'kind':'app','sourceServerId':'local','projectId':'project-2'})['fingerprint']
+        self.assertEqual(len({base,model,connection,project}),4)
+        result=self.handoff(modelSelection=selected).send(self.bundle)
+        self.assertEqual(result['fingerprint'],model)
+        created=next(value for method,value in self.bridge.calls if method=='create')
+        self.assertEqual(created['model'],'demo/model/with/slash')
+        self.assertNotIn('demo/model',self.bridge.prompt)
+        self.assertEqual(read_handoff(self.root,result['requestId'])['modelSelection'],selected)
+
+    def test_missing_native_authorization_fails_before_mutation_and_can_retry(self):
+        self.bridge.authorized=False
+        result=self.handoff().send(self.bundle)
+        self.assertEqual(result['status'],'failed')
+        self.assertFalse(result['submissionAttempted'])
+        self.assertFalse(any(method=='create' for method,_ in self.bridge.calls))
+        self.bridge.authorized=True
+        self.assertEqual(self.handoff().send(self.bundle)['status'],'completed')
+
+    def test_unknown_partial_receipt_keeps_true_sid_and_never_resubmits(self):
+        self.bridge.problem='unknown'
+        result=self.handoff().send(self.bundle)
+        self.assertEqual(result['status'],'unknown')
+        self.assertEqual(result['sessionId'],'sess_native_fixture')
+        self.assertFalse(result['nativeAccepted'])
+        self.assertTrue(self.handoff().send(self.bundle)['duplicate'])
+        self.assertEqual(sum(method=='create' for method,_ in self.bridge.calls),1)
+
+    def test_lost_create_ack_uses_readonly_durable_receipt_without_second_create(self):
+        self.bridge.problem='lost-ack'
+        result=self.handoff().send(self.bundle)
+        self.assertEqual(result['status'],'completed')
+        self.assertEqual(sum(method=='create' for method,_ in self.bridge.calls),1)
+        self.assertEqual(sum(method=='receipt' for method,_ in self.bridge.calls),1)
+
+    def test_pending_receipt_or_wrong_operation_remains_unknown_not_model_success(self):
+        for problem in ('lost-ack-pending','wrong-operation','wrong-id'):
+            with self.subTest(problem=problem):
+                self.bridge.problem=problem
+                result=self.handoff(discovery_path=self.root/(problem+'.json')).send(self.bundle)
+                self.assertEqual(result['status'],'unknown')
+                self.assertFalse(result['nativeCompleted'])
+                self.assertTrue(self.handoff(discovery_path=self.root/(problem+'.json')).send(self.bundle)['duplicate'])
+
+    def test_open_unavailable_cannot_be_reported_as_successful_visible_handoff(self):
+        self.bridge.opened=False
+        result=self.handoff().send(self.bundle)
+        self.assertEqual(result['status'],'failed')
+        self.assertTrue(result['nativeCompleted'])
+        self.assertFalse(result['uiOpened'])
+        self.assertTrue(self.handoff().send(self.bundle)['duplicate'])
+
+    def test_wait_outer_completed_does_not_mask_failed_inner_operation(self):
+        self.bridge.outcomes=['failed']
+        result=self.handoff().send(self.bundle)
+        self.assertEqual(result['status'],'failed')
+        self.assertFalse(result['nativeCompleted'])
+        self.assertEqual(result['nativeOutcome'],'failed')
+        self.assertTrue(result['nativeAccepted'])
+
+    def test_old_incorrect_flat_wait_shape_is_never_native_completion(self):
+        self.bridge.problem='legacy-flat-wait'
+        result=self.handoff().send(self.bundle)
+        self.assertEqual(result['status'],'unknown')
+        self.assertFalse(result['nativeCompleted'])
+        self.assertTrue(self.handoff().send(self.bundle)['duplicate'])
+        self.assertEqual(sum(method=='create' for method,_ in self.bridge.calls),1)
+
+    def test_official_optional_local_source_id_is_not_an_extra_compatibility_gate(self):
+        self.bridge.problem='optional-source'
+        result=self.handoff(project_ref={'kind':'app','projectId':'fixture-project'}).send(self.bundle)
+        self.assertEqual(result['status'],'completed')
+        self.assertTrue(result['nativeCompleted'])
+
+    def test_explicit_native_precondition_rejection_is_retryable_without_replaying_accepted_input(self):
+        self.bridge.problem='rejected'
+        first=self.handoff().send(self.bundle)
+        self.assertEqual(first['status'],'failed')
+        self.assertFalse(first['submissionAttempted'])
+        self.bridge.problem=None
+        second=self.handoff().send(self.bundle)
+        self.assertEqual(second['status'],'completed')
+        self.assertNotEqual(first['requestId'],second['requestId'])
+
+    def test_gateway_write_preconditions_remain_retryable_even_if_read_health_was_authorized(self):
+        for problem in ('not-granted','not-declared','incompatible'):
+            with self.subTest(problem=problem):
+                self.bridge.problem=problem
+                result=self.handoff(discovery_path=self.root/(problem+'.json')).send(self.bundle)
+                self.assertEqual(result['status'],'failed')
+                self.assertFalse(result['submissionAttempted'])
+                self.assertFalse(result['nativeAccepted'])
+                self.bridge.problem=None
+                retried=self.handoff(discovery_path=self.root/(problem+'.json')).send(self.bundle)
+                self.assertEqual(retried['status'],'completed')
+
+    def test_first_visible_message_contains_scrubbed_page_and_annotated_controls(self):
+        self.workspace.save_capture({'page':{'url':'https://example.test/orders','title':'订单查询页面'},
+            'control':{'tagName':'input'},'annotation':{'name':'订单号输入框','description':'输入订单编号后查询'}})
+        bundle=self.workspace.export_page_bundle('https://example.test/orders')
+        path=Path(bundle['bundlePath']); payload=json.loads(path.read_text(encoding='utf-8'))
+        payload['page']['url']='https://user:pass@example.test/orders?token=PRIVATE_QUERY#secret'
+        payload['captures'][0]['capture']['annotation'].update(name='查询按钮',description='查看订单结果 api_key=PRIVATE_LITERAL')
+        path.write_text(json.dumps(payload),encoding='utf-8')
+        result=self.handoff().send(bundle)
+        prompt=self.bridge.prompt
+        self.assertEqual(result['status'],'completed')
+        self.assertIn('页面：订单查询页面',prompt)
+        self.assertIn('地址：https://example.test/orders',prompt)
+        self.assertIn('查询按钮：查看订单结果',prompt)
+        self.assertIn('订单号输入框：输入订单编号后查询',prompt)
+        self.assertIn('只是控件罗列，用户未声明操作先后',prompt)
+        self.assertNotIn('PRIVATE_QUERY',prompt)
+        self.assertNotIn('PRIVATE_LITERAL',prompt)
+        self.assertNotIn('user:pass',prompt)
+        self.assertIn('等待我补充',prompt)
+        self.assertLessEqual(len(prompt),3500)
+
+    def test_declared_sequence_is_visible_and_uses_exact_capture_order(self):
+        payload={'page':{'origin':'https://example.test','path':'/orders'},'captures':[
+            {'captureId':'one','capture':{'annotation':{'name':'输入条件','description':'输入订单号'}}},
+            {'captureId':'two','capture':{'annotation':{'name':'查询','description':'查看结果'}}}],
+            'sequence':{'captureIds':['two','one'],'ordered':True}}
+        summary=_visible_controls_summary(payload)
+        self.assertIn('用户声明期望按下列顺序操作',summary)
+        self.assertIn('尚未执行验证',summary)
+        self.assertLess(summary.index('1. 查询'),summary.index('2. 输入条件'))
+        payload['sequence']['ordered']=False
+        self.assertIn('只是控件罗列',_visible_controls_summary(payload))
+        self.assertNotIn('用户声明期望按下列顺序操作',_visible_controls_summary(payload))
+
+    def test_visible_summary_caps_twelve_controls_each_purpose_and_entire_message(self):
+        payload={'page':{'title':'长页面标题'*80,'origin':'https://example.test','path':'/orders'},
+                 'captures':[{'captureId':str(i),'capture':{'annotation':{
+                    'name':f'控件名称{i}'+('很长名称'*30),'description':('用途摘要'*80)+'OMITTED_TAIL'}}} for i in range(20)]}
+        summary=_visible_controls_summary(payload)
+        rows=[line for line in summary.splitlines() if line[:1].isdigit()]
+        self.assertLessEqual(len(summary),3500)
+        self.assertEqual(len(rows),12)
+        self.assertTrue(all(len(row.split('：',1)[1])<=180 for row in rows))
+        self.assertNotIn('OMITTED_TAIL',summary)
+        self.assertNotIn('13. ',summary)
+        self.assertIn('其余控件',summary)
 
 
 class FakeIndex:
@@ -190,6 +474,68 @@ class BackgroundHandoffTests(unittest.TestCase):
         self.assertEqual(receipt['handoffIntent'], 'learn-and-verify')
         request = json.loads((Path(learned['journalPath']) / 'request.json').read_text(encoding='utf-8'))
         self.assertEqual(request['contextPath'], self.bundle['contextPath'])
+
+    def test_inferred_policy_has_its_own_handoff_identity_and_saved_receipt(self):
+        self.learning_bundle()
+        legacy = self.handoff().send(self.bundle)
+        path = Path(self.bundle['bundlePath'])
+        payload = json.loads(path.read_text(encoding='utf-8'))
+        payload['taskIntent']['actionPolicy'] = 'infer-from-purpose'
+        path.write_text(json.dumps(payload), encoding='utf-8')
+        view = inspect_handoff(self.root, self.bundle)
+        self.assertTrue(view['canSubmit'])
+        self.assertEqual(view['actionPolicy'], 'infer-from-purpose')
+        self.assertNotEqual(view['fingerprint'], legacy['fingerprint'])
+        current = self.handoff().send(self.bundle)
+        self.assertEqual(current['actionPolicy'], 'infer-from-purpose')
+        self.assertNotEqual(current['requestId'], legacy['requestId'])
+        self.assertEqual(len(self.server.calls), 2)
+        self.assertEqual(read_handoff(self.root, current['requestId'])['actionPolicy'], 'infer-from-purpose')
+        self.assertTrue(self.handoff().send(self.bundle)['duplicate'])
+        self.assertEqual(len(self.server.calls), 2)
+
+    def test_unknown_action_policy_stops_before_index_or_model(self):
+        self.learning_bundle()
+        path = Path(self.bundle['bundlePath'])
+        payload = json.loads(path.read_text(encoding='utf-8'))
+        for policy in (None, True, [], 'allow-everything'):
+            with self.subTest(policy=policy):
+                payload['taskIntent']['actionPolicy'] = policy
+                path.write_text(json.dumps(payload), encoding='utf-8')
+                with self.assertRaises(HandoffError):
+                    self.handoff().send(self.bundle)
+        self.assertEqual(self.index.preflights, 0)
+        self.assertEqual(self.server.calls, [])
+
+    def test_only_electron_bundled_cli_identifies_a_desktop_index_executable(self):
+        calls = []
+        fake_module = SimpleNamespace(DesktopTaskIndex=lambda workspace, desktop_path=None:
+                                      calls.append(desktop_path) or self.index)
+        native = self.root / 'standalone' / 'ZCode.exe'
+        native.parent.mkdir()
+        native.write_bytes(b'fixture native CLI')
+        desktop = self.root / 'desktop' / 'ZCode.exe'
+        bundle = desktop.parent / 'resources' / 'glm' / 'zcode.cjs'
+        bundle.parent.mkdir(parents=True)
+        desktop.write_bytes(b'fixture Electron desktop')
+        bundle.write_text('// fixture bundled CLI', encoding='utf-8')
+        with patch.dict(sys.modules, {'desktop_index': fake_module}):
+            for command, expected in (([str(native)], None),
+                                      ([str(desktop), str(bundle)], str(desktop.resolve()))):
+                with self.subTest(command=command), patch('zcode_handoff.resolve_command', return_value=command):
+                    ZCodeHandoff(self.root, commandPath='fixture-selected-entry', server_factory=lambda **kwargs: self.server)
+                    self.assertEqual(calls[-1], expected)
+        self.assertEqual(self.server.calls, [])
+
+    def test_index_adapter_failure_is_distinct_from_cli_connection_and_precedes_model(self):
+        def unavailable(*args, **kwargs):
+            raise ValueError('fixture desktop index version unavailable')
+        with patch.dict(sys.modules, {'desktop_index': SimpleNamespace(DesktopTaskIndex=unavailable)}), \
+             patch('zcode_handoff.resolve_command', return_value=[sys.executable]):
+            with self.assertRaisesRegex(HandoffError, 'CLI入口已解析，但桌面对话索引适配不可用；尚未发送模型任务'):
+                ZCodeHandoff(self.root, commandPath='fixture-independent-cli', server_factory=lambda **kwargs: self.server)
+        self.assertEqual(self.server.bindings, [])
+        self.assertEqual(self.server.calls, [])
 
     def test_learning_scope_changes_fingerprint_but_runtime_location_does_not(self):
         self.learning_bundle()

@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from desktop_index import DesktopTaskIndex, DesktopIndexError, SUPPORTED_VERSION
+from desktop_index import DesktopTaskIndex, DesktopIndexError, REFERENCE_SCHEMA_VERSION
 
 
 # Independent fixture of the four inspected desktop tables. Other desktop
@@ -39,6 +39,30 @@ CREATE TABLE unrelated_data(id TEXT PRIMARY KEY,payload TEXT);
 INSERT INTO hosts(host_id,kind) VALUES('local','local');
 INSERT INTO unrelated_data VALUES('fixture','keep this unrelated metadata');
 """
+
+# Independently written fixtures of the v3.18.2 structures used by this adapter:
+# https://github.com/zai-org/ZCode/blob/v3.18.2/packages/services/src/project-storage/schema.baseline.sql
+# Admission behavior: packages/services/src/task-groups/repository.ts::admit.
+PLACEMENT_DDL = """
+CREATE TABLE task_group_admissions(
+ workspace_key TEXT NOT NULL,task_id TEXT NOT NULL,system_kind TEXT,
+ user_organized INTEGER NOT NULL DEFAULT 0,creation_id TEXT,PRIMARY KEY(workspace_key,task_id));
+CREATE TABLE task_group_view_node_orders(
+ node_type TEXT NOT NULL,node_key TEXT NOT NULL,sort_order INTEGER NOT NULL,
+ created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(node_type,node_key));
+CREATE INDEX idx_task_group_view_node_orders_order ON task_group_view_node_orders(sort_order,created_at);
+"""
+PURGE_DDL = """
+CREATE TABLE task_purge(workspace_key TEXT NOT NULL,task_id TEXT NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('pending','deleted')),PRIMARY KEY(workspace_key,task_id));
+CREATE TRIGGER task_purge_insert_guard BEFORE INSERT ON tasks
+ WHEN EXISTS(SELECT 1 FROM task_purge WHERE workspace_key=new.workspace_key AND task_id=new.task_id AND state='deleted')
+ BEGIN SELECT RAISE(ABORT,'task.permanently-deleted'); END;
+CREATE TRIGGER task_purge_restore_guard BEFORE UPDATE OF archived ON tasks
+ WHEN new.archived=0 AND EXISTS(SELECT 1 FROM task_purge WHERE workspace_key=new.workspace_key AND task_id=new.task_id)
+ BEGIN SELECT RAISE(ABORT,'task.permanent-deletion-pending'); END;
+"""
+BASELINE_318_DDL = DDL.replace('cli_deleted INTEGER,','cli_deleted INTEGER,worktree_root TEXT,') + PLACEMENT_DDL + PURGE_DDL
 
 # Metadata-only subset of the inspected native CLI schema. No production
 # connection can select messages, parts, model choices, or credentials.
@@ -81,16 +105,34 @@ class DesktopIndexTests(unittest.TestCase):
         self.temp.cleanup()
 
     @staticmethod
-    def create_database(path):
+    def create_database(path, ddl=DDL):
         path.parent.mkdir(parents=True, exist_ok=True)
         with fixture_database(path) as db:
-            db.executescript(DDL)
+            db.executescript(ddl)
 
     def adapter(self, **options):
         options.setdefault("database_path", self.db_path)
-        options.setdefault("desktop_version", SUPPORTED_VERSION)
+        options.setdefault("desktop_version", REFERENCE_SCHEMA_VERSION)
         options.setdefault("cli_db_path", self.cli_db_path)
         return DesktopTaskIndex(self.workspace, self.exe, **options)
+
+    def test_deployment_path_overrides_are_process_local_and_explicit_paths_win(self):
+        before = self.db_path.read_bytes(), self.cli_db_path.read_bytes()
+        values = {'CDP_PICKER_DESKTOP_EXE': str(self.exe),
+                  'CDP_PICKER_DESKTOP_INDEX': str(self.db_path),
+                  'CDP_PICKER_CLI_DATABASE': str(self.cli_db_path)}
+        with patch.dict(os.environ, values):
+            adapter = DesktopTaskIndex(self.workspace, desktop_version=REFERENCE_SCHEMA_VERSION)
+            self.assertEqual(adapter.desktop, self.exe)
+            self.assertEqual(adapter.index, self.db_path)
+            self.assertEqual(adapter.cli_db, self.cli_db_path)
+        with patch.dict(os.environ, {key: str(self.base / 'nonexistent') for key in values}):
+            adapter = self.adapter()
+            self.assertEqual(adapter.desktop, self.exe)
+            self.assertEqual(adapter.index, self.db_path)
+            self.assertEqual(adapter.cli_db, self.cli_db_path)
+        self.assertEqual((self.db_path.read_bytes(), self.cli_db_path.read_bytes()), before)
+        self.assertFalse((self.workspace / '.handoffs').exists())
 
     def seed_cli(self, session_id, *, directory=None, workspace_id=None, parent_id=None,
                  task_type="interactive", deleted=None, mode="yolo", plan=False, linked=False,
@@ -201,21 +243,260 @@ class DesktopIndexTests(unittest.TestCase):
                 adapter.register(session, title="Must not revive")
             self.assertEqual(self.query("SELECT * FROM tasks WHERE task_id=?", (session,)), before)
 
-    def test_schema_version_and_unique_constraint_changes_fail_before_write(self):
-        with self.assertRaises(DesktopIndexError):
-            self.adapter(desktop_version="3.17.0.1")
+    def test_missing_unique_semantics_fail_before_write_regardless_of_version(self):
         with fixture_database(self.db_path) as db:
             db.execute("DROP INDEX idx_tasks_host_task")
-        with self.assertRaises(DesktopIndexError):
-            self.adapter().register("sess_no_constraint", title="Draft")
+        with self.assertRaisesRegex(DesktopIndexError,"主键/唯一"):
+            self.adapter(desktop_version="3.18.2").register("sess_no_constraint", title="Draft")
         self.assertEqual(self.query("SELECT * FROM tasks"), [])
         self.assertFalse((self.workspace / ".handoffs").exists())
-        self.db_path = self.base / "future schema.sqlite"
-        self.create_database(self.db_path)
+
+    def test_versions_are_observations_not_an_allowlist_when_schema_is_compatible(self):
+        for number,version in enumerate(("3.18.2","99.20.1.8")):
+            self.db_path=self.base/('compatible-version-'+str(number)+'.sqlite')
+            self.create_database(self.db_path)
+            session='sess_compatible_version_'+str(number)
+            self.seed_cli(session)
+            before=self.db_path.read_bytes(),self.cli_db_path.read_bytes()
+            adapter=self.adapter(desktop_version=version)
+            with self.subTest(version=version):
+                self.assertEqual(adapter.preflight()['desktopVersion'],version)
+                self.assertEqual((self.db_path.read_bytes(),self.cli_db_path.read_bytes()),before)
+                registered=adapter.register(session,title='Schema-compatible desktop')
+                self.assertTrue(registered['indexRegistered'])
+                self.assertEqual(registered['desktopVersion'],version)
+                self.assertEqual(self.query('SELECT task_id FROM tasks'),[{'task_id':session}])
+
+    def test_additive_columns_reordered_keys_and_type_affinities_preserve_existing_data(self):
+        changed=(DDL.replace('workspace_key TEXT NOT NULL,workspace_path TEXT NOT NULL',
+                             'workspace_path TEXT NOT NULL,workspace_key TEXT NOT NULL')
+                 .replace('PRIMARY KEY(workspace_key,task_id)','PRIMARY KEY(task_id,workspace_key)')
+                 .replace('PRIMARY KEY(project_id,root_path)','PRIMARY KEY(root_path,project_id)')
+                 .replace('idx_tasks_host_task ON tasks(host_id,task_id)','renamed_task_identity ON tasks(task_id,host_id)')
+                 .replace('idx_projects_host_name ON projects(host_id,name) WHERE deleted=0',
+                          'renamed_active_project ON projects(name,host_id) WHERE (0 = "deleted")')
+                 .replace('TEXT','VARCHAR(255)').replace('INTEGER','BIGINT'))
+        self.db_path=self.base/'additive-reordered.sqlite'
+        self.create_database(self.db_path,changed)
+        self.cli_db_path=self.base/'affinity-compatible CLI.sqlite'
+        with fixture_database(self.cli_db_path) as db:
+            db.executescript(CLI_DDL.replace('TEXT','VARCHAR(255)').replace('INTEGER','BIGINT'))
         with fixture_database(self.db_path) as db:
-            db.execute("ALTER TABLE tasks ADD COLUMN unknown_future_field TEXT")
-        with self.assertRaises(DesktopIndexError):
-            self.adapter().preflight()
+            db.execute('ALTER TABLE tasks ADD COLUMN future_note TEXT')
+            db.execute('ALTER TABLE tasks ADD COLUMN future_counter INTEGER NOT NULL DEFAULT 7')
+            db.execute("ALTER TABLE projects ADD COLUMN future_project TEXT NOT NULL DEFAULT 'new-project'")
+            db.execute("ALTER TABLE project_roots ADD COLUMN future_root TEXT DEFAULT 'new-root'")
+        adapter=self.adapter(desktop_version='3.18.2')
+        self.seed_cli('sess_original_additive')
+        adapter.register('sess_original_additive',title='Original task')
+        with fixture_database(self.db_path) as db:
+            db.execute("UPDATE tasks SET future_note='user note',future_counter=81,pinned=1")
+            db.execute("UPDATE projects SET future_project='user project metadata'")
+            db.execute("UPDATE project_roots SET future_root='user root metadata'")
+        original=self.query("SELECT * FROM tasks WHERE task_id='sess_original_additive'")
+        projects=self.query('SELECT * FROM projects')
+        roots=self.query('SELECT * FROM project_roots')
+        unrelated=self.query('SELECT * FROM unrelated_data')
+        before=self.db_path.read_bytes(),self.cli_db_path.read_bytes()
+        self.assertTrue(adapter.preflight()['canRegister'])
+        self.assertEqual((self.db_path.read_bytes(),self.cli_db_path.read_bytes()),before)
+        self.seed_cli('sess_new_additive')
+        cli_before=self.cli_db_path.read_bytes()
+        registered=adapter.register('sess_new_additive',title='Second task')
+        added=self.query("SELECT * FROM tasks WHERE task_id='sess_new_additive'")[0]
+        self.assertIsNone(added['future_note'])
+        self.assertEqual(added['future_counter'],7)
+        self.assertEqual(self.query("SELECT * FROM tasks WHERE task_id='sess_original_additive'"),original)
+        self.assertEqual(self.query('SELECT * FROM projects'),projects)
+        self.assertEqual(self.query('SELECT * FROM project_roots'),roots)
+        self.assertEqual(self.query('SELECT * FROM unrelated_data'),unrelated)
+        self.assertEqual(self.cli_db_path.read_bytes(),cli_before)
+        with fixture_database(registered['backupPath']) as backup:
+            self.assertEqual(backup.execute("SELECT future_note,future_counter FROM tasks WHERE task_id='sess_original_additive'").fetchone(),('user note',81))
+
+    def test_unused_legacy_columns_can_disappear_and_new_project_is_explicitly_active(self):
+        changed=(DDL.replace('model TEXT,','').replace('migration_source TEXT,','')
+                 .replace('deleted INTEGER NOT NULL DEFAULT 0,deleted_at',
+                          'deleted INTEGER NOT NULL DEFAULT 1,deleted_at'))
+        self.db_path=self.base/'minimal-required-columns.sqlite'
+        self.create_database(self.db_path,changed)
+        self.seed_cli('sess_required_columns')
+        result=self.adapter(desktop_version='3.18.2').register('sess_required_columns',title='Active project')
+        self.assertTrue(result['created'])
+        self.assertEqual(self.query('SELECT deleted FROM projects'),[{'deleted':0}])
+
+    def test_verified_task_host_project_and_root_foreign_keys_are_compatible(self):
+        changed=(DDL.replace('host_id TEXT,root_path TEXT,','host_id TEXT REFERENCES hosts(host_id),root_path TEXT,')
+                 .replace('project_id TEXT,execution_directories','project_id TEXT REFERENCES projects(project_id),execution_directories')
+                 .replace('PRIMARY KEY(workspace_key,task_id)',
+                          'FOREIGN KEY(project_id,root_path) REFERENCES project_roots(project_id,root_path),PRIMARY KEY(workspace_key,task_id)'))
+        self.db_path=self.base/'verified-foreign-mappings.sqlite'
+        self.create_database(self.db_path,changed)
+        self.seed_cli('sess_verified_foreign')
+        self.assertTrue(self.adapter(desktop_version='3.18.2').register('sess_verified_foreign',title='Verified mappings')['created'])
+        with fixture_database(self.db_path) as db:self.assertEqual(db.execute('PRAGMA foreign_key_check').fetchall(),[])
+
+    def test_exact_318_baseline_preflight_is_read_only_and_new_task_gets_native_root_admission(self):
+        self.db_path=self.base/'desktop-3.18.2-baseline.sqlite'
+        self.create_database(self.db_path,BASELINE_318_DDL)
+        with fixture_database(self.db_path) as db:
+            db.execute("INSERT INTO task_group_view_node_orders VALUES('group','user-order',-9,4,5)")
+            db.execute("INSERT INTO task_group_admissions VALUES('other-workspace','sess_other',NULL,1,'user-placement')")
+        before=self.db_path.read_bytes(),self.cli_db_path.read_bytes()
+        prior_order=self.query('SELECT * FROM task_group_view_node_orders')
+        adapter=self.adapter(desktop_version='3.18.2')
+        self.assertEqual(adapter.preflight()['taskPlacement'],'native-root-admission')
+        self.assertEqual((self.db_path.read_bytes(),self.cli_db_path.read_bytes()),before)
+        self.assertFalse((self.workspace/'.handoffs').exists())
+        session='sess_318_new_task'
+        self.seed_cli(session)
+        result=adapter.register(session,title='新任务标题',task_path=self.task)
+        task=self.query('SELECT * FROM tasks WHERE task_id=?',(session,))[0]
+        key=json.dumps([str(self.workspace),session],ensure_ascii=False,separators=(',',':'))
+        self.assertEqual(self.query('SELECT * FROM task_group_admissions WHERE task_id=?',(session,)),
+                         [{'workspace_key':str(self.workspace),'task_id':session,'system_kind':None,
+                           'user_organized':0,'creation_id':None}])
+        order=self.query("SELECT * FROM task_group_view_node_orders WHERE node_type='task'")[0]
+        self.assertEqual((order['node_key'],order['sort_order']),(key,-10))
+        self.assertEqual(order['created_at'],order['updated_at'])
+        self.assertGreater(order['created_at'],0)
+        self.assertEqual(self.query("SELECT * FROM task_group_view_node_orders WHERE node_type='group'"),prior_order)
+        self.assertEqual((task['title'],task['cli_title'],task['cli_last_outcome'],task['cli_deleted']),
+                         ('新任务标题','新任务标题','completed',0))
+        self.assertGreater(task['cli_created_at'],0)
+        self.assertGreaterEqual(task['cli_updated_at'],task['cli_created_at'])
+        self.assertIsNone(task['worktree_root'])
+        with fixture_database(result['backupPath']) as backup:
+            self.assertEqual(backup.execute('SELECT count(*) FROM task_group_admissions').fetchone()[0],1)
+            self.assertEqual(backup.execute('SELECT count(*) FROM tasks').fetchone()[0],0)
+        with fixture_database(self.db_path) as db:
+            db.execute("UPDATE task_group_admissions SET user_organized=1,creation_id='user-reorganized' WHERE task_id=?",(session,))
+            db.execute("UPDATE task_group_view_node_orders SET sort_order=73 WHERE node_key=?",(key,))
+        snapshots={table:self.query('SELECT * FROM '+table) for table in ('tasks','projects','project_roots','task_group_admissions','task_group_view_node_orders','task_purge')}
+        repeat=adapter.register(session,title='Must not overwrite')
+        self.assertFalse(repeat['created'])
+        self.assertIsNone(repeat['backupPath'])
+        for table,rows in snapshots.items():self.assertEqual(self.query('SELECT * FROM '+table),rows)
+
+    def test_existing_tasks_are_not_backfilled_and_existing_user_group_or_order_is_not_rearranged(self):
+        self.seed_cli('sess_old_without_admission')
+        adapter=self.adapter(desktop_version='3.18.2')
+        adapter.register('sess_old_without_admission',title='Already indexed before upgrade')
+        with fixture_database(self.db_path) as db:
+            db.executescript(PLACEMENT_DDL)
+            db.execute('CREATE TABLE task_group_members(group_id TEXT,workspace_key TEXT,task_id TEXT,PRIMARY KEY(workspace_key,task_id))')
+        adapter.register('sess_old_without_admission',title='No backfill')
+        self.assertEqual(self.query('SELECT * FROM task_group_admissions'),[])
+        self.assertEqual(self.query('SELECT * FROM task_group_view_node_orders'),[])
+        for session,grouped in (('sess_user_group',True),('sess_user_order',False)):
+            self.seed_cli(session)
+            key=json.dumps([str(self.workspace),session],separators=(',',':'))
+            with fixture_database(self.db_path) as db:
+                if grouped:db.execute("INSERT INTO task_group_members VALUES('user-group',?,?)",(str(self.workspace),session))
+                else:db.execute("INSERT INTO task_group_view_node_orders VALUES('task',?,47,10,20)",(key,))
+            before_members=self.query('SELECT * FROM task_group_members')
+            before_orders=self.query('SELECT * FROM task_group_view_node_orders')
+            adapter.register(session,title='Keep existing organization')
+            self.assertEqual(self.query('SELECT * FROM task_group_members'),before_members)
+            self.assertEqual(self.query('SELECT * FROM task_group_view_node_orders'),before_orders)
+            self.assertEqual(self.query('SELECT user_organized FROM task_group_admissions WHERE task_id=?',(session,)),[{'user_organized':1}])
+
+    def test_new_admission_failure_rolls_back_task_project_and_both_placement_writes(self):
+        self.db_path=self.base/'placement-rollback.sqlite'
+        self.create_database(self.db_path,BASELINE_318_DDL)
+        self.seed_cli('sess_placement_rollback')
+        adapter=self.adapter(desktop_version='3.18.2')
+        original=adapter._admit_new_task
+        before=self.db_path.read_bytes()
+        def fail_after_admission(*args):
+            original(*args)
+            raise DesktopIndexError('fixture failure after admission')
+        with patch.object(adapter,'_admit_new_task',side_effect=fail_after_admission),self.assertRaisesRegex(DesktopIndexError,'after admission'):
+            adapter.register('sess_placement_rollback',title='Must roll back')
+        self.assertEqual(self.db_path.read_bytes(),before)
+        for table in ('tasks','projects','project_roots','task_group_admissions','task_group_view_node_orders'):
+            self.assertEqual(self.query('SELECT * FROM '+table),[])
+        self.assertTrue(list((self.workspace/'.handoffs'/'index-backups').glob('*.sqlite')))
+
+    def test_partial_or_broken_placement_and_changed_purge_guards_fail_before_write(self):
+        only_admission=PLACEMENT_DDL.split('CREATE TABLE task_group_view_node_orders')[0]
+        only_order=PLACEMENT_DDL[PLACEMENT_DDL.index('CREATE TABLE task_group_view_node_orders'):]
+        cases=(('only-admission',DDL+only_admission,'接纳结构不完整'),
+               ('only-order',DDL+only_order,'接纳结构不完整'),
+               ('bad-order-affinity',(DDL+PLACEMENT_DDL).replace('sort_order INTEGER NOT NULL','sort_order TEXT NOT NULL'),'类型不兼容'),
+               ('new-order-required',(DDL+PLACEMENT_DDL).replace('PRIMARY KEY(node_type,node_key)','future_required TEXT NOT NULL,PRIMARY KEY(node_type,node_key)'),'必填字段'),
+               ('missing-order-key',(DDL+PLACEMENT_DDL).replace('PRIMARY KEY(node_type,node_key)','PRIMARY KEY(node_key)'),'唯一约束'),
+               ('changed-guard',BASELINE_318_DDL.replace("state='deleted'","state='pending'"),'保护触发器语义'),
+               ('missing-guard',BASELINE_318_DDL[:BASELINE_318_DDL.index('CREATE TRIGGER task_purge_restore_guard')],'删除保护结构不完整'),
+               ('bad-purge-key',BASELINE_318_DDL.replace('state IN (\'pending\',\'deleted\')),PRIMARY KEY(workspace_key,task_id)',"state IN ('pending','deleted')),PRIMARY KEY(task_id)"),'主键/唯一语义'))
+        for name,ddl,message in cases:
+            self.db_path=self.base/(name+'.sqlite')
+            self.create_database(self.db_path,ddl)
+            before=self.db_path.read_bytes()
+            with self.subTest(name=name),self.assertRaisesRegex(DesktopIndexError,message):
+                self.adapter(desktop_version='3.18.2').preflight()
+            self.assertEqual(self.db_path.read_bytes(),before)
+            self.assertFalse((self.workspace/'.handoffs').exists())
+
+    def test_purge_guards_accept_format_quotes_and_case_but_never_revive_tombstones(self):
+        formatted=BASELINE_318_DDL.replace('CREATE TRIGGER task_purge_insert_guard BEFORE INSERT ON tasks',
+            'CREATE TRIGGER IF NOT EXISTS "task_purge_insert_guard" BEFORE INSERT ON "tasks" FOR EACH ROW')
+        formatted=formatted.replace('SELECT RAISE(ABORT,','select raise(abort,')
+        self.db_path=self.base/'purge-protected.sqlite'
+        self.create_database(self.db_path,formatted)
+        adapter=self.adapter(desktop_version='3.18.2')
+        self.assertTrue(adapter.preflight()['canRegister'])
+        for number,state in enumerate(('deleted','pending')):
+            session='sess_purged_'+str(number)
+            self.seed_cli(session)
+            with fixture_database(self.db_path) as db:db.execute('INSERT INTO task_purge VALUES(?,?,?)',(str(self.workspace),session,state))
+            before=self.db_path.read_bytes(),self.cli_db_path.read_bytes()
+            with self.subTest(state=state),self.assertRaisesRegex(DesktopIndexError,'墓碑'):
+                adapter.register(session,title='Must not revive')
+            self.assertEqual((self.db_path.read_bytes(),self.cli_db_path.read_bytes()),before)
+            self.assertEqual(self.query('SELECT * FROM tasks'),[])
+            self.assertEqual(self.query('SELECT * FROM projects'),[])
+            self.assertEqual(self.query('SELECT * FROM task_group_admissions'),[])
+        with fixture_database(self.db_path) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM sqlite_master WHERE type='trigger'").fetchone()[0],2)
+
+    def test_destructive_columns_and_constraints_fail_closed_before_backup_or_write(self):
+        cases=(
+            ('missing-field',DDL.replace('mode TEXT NOT NULL','unknown_mode TEXT NOT NULL'),'缺少必需字段'),
+            ('wrong-affinity',DDL.replace("title TEXT NOT NULL DEFAULT ''","title BLOB NOT NULL DEFAULT ''"),'类型不兼容'),
+            ('mandatory-new-column',DDL.replace('PRIMARY KEY(workspace_key,task_id)','future_required TEXT NOT NULL,PRIMARY KEY(workspace_key,task_id)'),'必填字段'),
+            ('null-default',DDL.replace('PRIMARY KEY(workspace_key,task_id)','future_required TEXT NOT NULL DEFAULT NULL,PRIMARY KEY(workspace_key,task_id)'),'必填字段'),
+            ('lost-primary-identity',DDL.replace('PRIMARY KEY(workspace_key,task_id)','PRIMARY KEY(task_id)'),'唯一约束'),
+            ('wrong-active-predicate',DDL.replace('WHERE deleted=0','WHERE deleted=1'),'唯一约束'),
+            ('extra-unique',DDL+'CREATE UNIQUE INDEX unsafe_title_uniqueness ON tasks(title);','唯一约束'),
+            ('unknown-check',DDL.replace("mode TEXT NOT NULL DEFAULT 'build'","mode TEXT NOT NULL DEFAULT 'build' CHECK(mode='edit')"),'CHECK'),
+            ('unknown-fk',DDL.replace('provider TEXT,','provider TEXT REFERENCES unrelated_data(id),'),'外键'),
+            ('unknown-trigger',DDL+"CREATE TRIGGER surprise_write AFTER INSERT ON tasks BEGIN DELETE FROM unrelated_data; END;",'触发器'),
+            ('unknown-generated',DDL.replace('PRIMARY KEY(workspace_key,task_id)',"future_derived TEXT GENERATED ALWAYS AS (title || '!') VIRTUAL,PRIMARY KEY(workspace_key,task_id)"),'生成列'),
+        )
+        for name,ddl,message in cases:
+            self.db_path=self.base/(name+'.sqlite')
+            self.create_database(self.db_path,ddl)
+            before=self.db_path.read_bytes(),self.cli_db_path.read_bytes()
+            with self.subTest(change=name),self.assertRaisesRegex(DesktopIndexError,message):
+                self.adapter(desktop_version='3.18.2').preflight()
+            self.assertEqual((self.db_path.read_bytes(),self.cli_db_path.read_bytes()),before)
+            self.assertFalse((self.workspace/'.handoffs').exists())
+
+    def test_semantic_preflight_only_issues_reads_and_keeps_local_mapping_checks(self):
+        adapter=self.adapter(desktop_version='3.18.2')
+        original=adapter._connect
+        statements=[]
+        def traced():
+            connection=original();connection.set_trace_callback(statements.append);return connection
+        with patch.object(adapter,'_connect',side_effect=traced):
+            self.assertTrue(adapter.preflight()['canRegister'])
+        self.assertTrue(statements)
+        self.assertFalse(any(statement.lstrip().lower().startswith(('insert','update','delete','create','alter','replace','drop')) for statement in statements))
+        with fixture_database(self.db_path) as db:db.execute("UPDATE hosts SET kind='ssh' WHERE host_id='local'")
+        before=self.db_path.read_bytes()
+        with self.assertRaisesRegex(DesktopIndexError,'本地主机映射'):adapter.preflight()
+        self.assertEqual(self.db_path.read_bytes(),before)
 
     def test_ambiguous_projects_and_outside_task_paths_are_rejected(self):
         self.seed_project("first", name="First")
@@ -275,7 +556,7 @@ class DesktopIndexTests(unittest.TestCase):
         data_base = self.base / "isolated ZCode data"
         expected = data_base / ".zcode" / "v2" / "tasks-index.sqlite"
         self.create_database(expected)
-        with patch.dict(os.environ, {"ZCODE_DATA_BASE_DIR": str(data_base)}), patch("desktop_index._product_version", return_value=SUPPORTED_VERSION) as read_version:
+        with patch.dict(os.environ, {"ZCODE_DATA_BASE_DIR": str(data_base)}), patch("desktop_index._product_version", return_value="3.18.2") as read_version:
             cli_path = data_base / ".zcode" / "cli" / "db" / "db.sqlite"
             cli_path.parent.mkdir(parents=True)
             with fixture_database(cli_path) as cli:
@@ -285,6 +566,7 @@ class DesktopIndexTests(unittest.TestCase):
             self.assertEqual(adapter.cli_db, cli_path)
             read_version.assert_called_once_with(self.exe)
             self.assertTrue(adapter.preflight()["canRegister"])
+            self.assertEqual(adapter.preflight()["desktopVersion"],"3.18.2")
         self.assertFalse((self.workspace / ".handoffs").exists())
 
     def test_missing_native_session_is_rejected_without_index_or_cli_writes(self):
