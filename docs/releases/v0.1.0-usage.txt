@@ -1,0 +1,28 @@
+CDP 控件采集器 v0.1.0 · Windows 便携面板版
+
+下载 ZIP 后解压到可写目录，双击 CDP-Control-Picker-v0.1.0.exe。
+采集功能不需要安装 Python、Node 或 ZCode；电脑需已有 Google Chrome。
+
+1. 点击“启动专用 Chrome”。
+2. 在该 Chrome 中打开服务网站，由你完成首次登录。
+3. 回到采集器点“刷新页面”，展开“目标页面”下拉框选中刚才的网页。
+4. 点击“连接所选页”，再点“开启右键采集”。
+5. 回到同一网页，右键普通控件，填写名称、用途、允许动作和预期结果，保存。
+6. 在“控件记录”中确认保存结果，可点“回页高亮验证”。
+
+刷新更新的是目标页列表，不会自动连接，也不会刷新网站本身。
+未自动发现 Chrome 时，可通过“Chrome 路径”选择本机已有 chrome.exe。
+
+浏览器资料默认在 EXE 旁的 CDP-Chrome-Profile，记录在 CDP-Picker-Workspace。
+继续使用原目录即可沿用原资料；也可在面板选择原工作区。网站会话过期后，回到同一个专用 Chrome 重新登录。
+
+本包是已确认可操作的 v0.1.0 面板版，按当前选中的单张控件卡交接。
+主分支中的小悬浮窗、同页多控件合并不包含在本包中。
+自动把任务投递到 ZCode 可见对话尚未实现；CLI 权限或会话问题可先通过“复制短任务”，粘贴到已有 ZCode 对话继续。
+
+首版支持普通主页面 DOM 控件，暂不支持 iframe、Shadow DOM、Canvas 内部对象。
+保存资料和能力生成结果均属于草稿，业务动作需要另行验证。
+
+独立源码仓库：https://github.com/Mikky574/cdp-control-picker
+本版下载：https://github.com/Mikky574/cdp-control-picker/releases/tag/v0.1.0
+对应源码：同仓库 v0.1.0 标签、release/0.1.x 分支，或本 Release 的 source.zip。

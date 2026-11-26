@@ -4,6 +4,10 @@
 
 源码仓库：[Mikky574/cdp-control-picker](https://github.com/Mikky574/cdp-control-picker)。当前交付为开发源码，已知问题和下一步接入要求见 [known-issues.md](docs/known-issues.md)。
 
+**直接使用程序：** [下载 v0.1.0 便携包](https://github.com/Mikky574/cdp-control-picker/releases/download/v0.1.0/CDP-Control-Picker-v0.1.0.zip) · [单独下载 EXE](https://github.com/Mikky574/cdp-control-picker/releases/download/v0.1.0/CDP-Control-Picker-v0.1.0.exe) · [Release 与对应源码](https://github.com/Mikky574/cdp-control-picker/releases/tag/v0.1.0)。解压后双击运行，采集功能无需 Python 或 Node。
+
+发布包是此前已确认可操作的 v0.1.0 面板版，源码对应 `v0.1.0` 标签及 `release/0.1.x` 分支。下面的 `main` 源码说明包括仍在开发的悬浮窗与页面汇总，详见[版本说明](docs/releases/v0.1.0.md)。
+
 这个目录包含完整采集器源码、图标、测试和两份配套技能，不依赖其他知识库的 HTML 或目录结构。原知识库副本继续保留。
 
 ## 使用与交接
@@ -70,4 +74,4 @@ python build.py --output dist --name CDP-Control-Picker
 
 `zcode_runner.py` 是保留的可选 CLI 适配代码及测试对象，默认采集窗口不依赖它。新增 ZCode 对话接入时须保留明确的目标会话、可见发送结果与可继续性。
 
-新仓尚未发布独立稳定 EXE；旧版发布与历史验证记录不等于本目录新版程序已经验收。
+新仓的 Release 提供 v0.1.0 可用面板版。`main` 中的新界面与页面汇总尚未完成冻结 EXE 验收，不能将旧版发布与历史验证记录视为开发版已验收。
