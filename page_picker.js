@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   if (window !== window.top) return;
-  const VERSION = '1.0.2';
+  const VERSION = '1.0.3';
   if (window.__cdpControlPicker && window.__cdpControlPicker.state) {
     try {
       if (window.__cdpControlPicker.state().version === VERSION) {
@@ -190,16 +190,16 @@
       *{box-sizing:border-box} [hidden]{display:none!important} button,input,textarea,select{font:inherit}button{cursor:pointer}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid #317be8;outline-offset:2px}
       .banner{position:fixed;top:12px;left:12px;max-width:calc(100vw - 24px);padding:8px 9px 8px 11px;background:#142139;color:#fff;border-radius:9px;box-shadow:0 4px 24px #14213922;pointer-events:auto;display:flex;align-items:center;gap:7px;font-size:13px}.banner small{display:block;font-size:11px;color:#c7d8f0}.banner button{background:#fff;color:#142139;border:0;border-radius:5px;padding:5px 8px;white-space:nowrap}.banner .grip{cursor:grab;touch-action:none;user-select:none;padding-right:4px}.banner .grip[data-dragging]{cursor:grabbing}.banner .dismiss{background:transparent;color:#fff;font-size:18px;line-height:1;padding:6px}
       .outline{position:fixed;border:3px solid #0b7c70;background:#0b7c7010;box-shadow:0 0 0 1px #fff;pointer-events:none;border-radius:3px}
-      .panel{position:fixed;width:390px;max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);overflow:auto;padding:18px;background:#fff;border:1px solid #d2ddea;border-radius:12px;box-shadow:0 12px 44px #14213933;pointer-events:auto}.panel h2{font-size:17px;margin:0 0 4px}.preview{font-size:12px;color:#5a6b83;overflow-wrap:anywhere;margin:0 0 13px}.panel label{font-size:13px;display:block;margin:11px 0 4px;font-weight:600}.panel input,.panel textarea,.panel select{display:block;width:100%;border:1px solid #bdcce0;border-radius:6px;background:#fff;color:#142139;padding:8px 10px;font-size:14px;min-height:38px}.panel textarea{resize:vertical;min-height:68px}.hint{font-size:12px;color:#5a6b83;margin-top:8px}.error{color:#b42318;font-size:13px;margin-top:9px}.actions{display:flex;justify-content:flex-end;gap:9px;margin-top:15px}.actions button{border:1px solid #c7d4e6;border-radius:6px;background:#fff;color:#142139;padding:7px 15px;min-height:36px}.actions button.primary{background:#175bd7;color:#fff;border-color:#175bd7}.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);max-width:calc(100vw - 28px);padding:11px 16px;background:#142139;color:#fff;border-radius:8px;box-shadow:0 4px 24px #14213933;pointer-events:none;overflow-wrap:anywhere;font-size:13px}
+      .panel{position:fixed;inset:auto;margin:0;color:inherit;width:390px;max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);overflow:auto;padding:18px;background:#fff;border:1px solid #d2ddea;border-radius:12px;box-shadow:0 12px 44px #14213933;pointer-events:auto}.panel::backdrop{background:transparent}.panel h2{font-size:17px;margin:0 0 4px}.preview{font-size:12px;color:#5a6b83;overflow-wrap:anywhere;margin:0 0 13px}.panel label{font-size:13px;display:block;margin:11px 0 4px;font-weight:600}.panel input,.panel textarea,.panel select{display:block;width:100%;border:1px solid #bdcce0;border-radius:6px;background:#fff;color:#142139;padding:8px 10px;font-size:14px;min-height:38px}.panel textarea{resize:vertical;min-height:68px}.hint{font-size:12px;color:#5a6b83;margin-top:8px}.error{color:#b42318;font-size:13px;margin-top:9px}.actions{display:flex;justify-content:flex-end;gap:9px;margin-top:15px}.actions button{border:1px solid #c7d4e6;border-radius:6px;background:#fff;color:#142139;padding:7px 15px;min-height:36px}.actions button.primary{background:#175bd7;color:#fff;border-color:#175bd7}.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);max-width:calc(100vw - 28px);padding:11px 16px;background:#142139;color:#fff;border-radius:8px;box-shadow:0 4px 24px #14213933;pointer-events:none;overflow-wrap:anywhere;font-size:13px}
       @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}} @media print{:host{display:none!important}}
     </style><div class="outline" hidden aria-hidden="true"></div>
     <div class="banner" hidden><div class="grip" title="拖动提示"><strong>控件采集模式</strong><small>在控件上右键标注</small></div><button type="button" data-ui="stop">停止</button><button type="button" class="dismiss" data-ui="dismiss" aria-label="隐藏提示，继续采集" title="隐藏提示，继续采集">×</button></div>
-    <section class="panel" role="dialog" aria-label="记录控件用途" hidden><h2>记录这个控件</h2><p class="preview"></p><form novalidate>
+    <dialog class="panel" aria-label="记录控件用途"><h2>记录这个控件</h2><p class="preview"></p><form novalidate>
       <label for="picker-name">控件名称</label><input id="picker-name" name="name" maxlength="120" autocomplete="off">
-      <label for="picker-description">这个位置是做什么的？ <span aria-hidden="true">*</span></label><textarea id="picker-description" name="description" maxlength="1500" required placeholder="例如：打开当前记录的只读详情"></textarea>
+      <label for="picker-description">这个位置是做什么的？ <span aria-hidden="true">*</span></label><textarea id="picker-description" name="description" maxlength="1500" required autofocus placeholder="例如：打开当前记录的只读详情"></textarea>
       <label for="picker-result">预期结果</label><input id="picker-result" name="result" maxlength="500" autocomplete="off" placeholder="例如：详情中显示相同的记录编号">
       <p class="hint"></p><div class="error" role="alert" hidden></div><div class="actions"><button type="button" data-ui="cancel">取消</button><button class="primary" type="submit">保存控件卡</button></div>
-    </form></section><div class="toast" role="status" aria-live="polite" hidden></div>`;
+    </form></dialog><div class="toast" role="status" aria-live="polite" hidden></div>`;
     const find = selector => shadow.querySelector(selector);
     ui = { outline: find('.outline'), banner: find('.banner'), panel: find('.panel'), preview: find('.preview'), form: find('form'), name: find('#picker-name'), description: find('#picker-description'), result: find('#picker-result'), hint: find('.hint'), error: find('.error'), toast: find('.toast') };
     const grip = find('.grip');
@@ -224,8 +224,12 @@
     });
     find('[data-ui="stop"]').addEventListener('click', disable);
     find('[data-ui="cancel"]').addEventListener('click', closeForm);
+    ui.panel.addEventListener('cancel', event => { event.preventDefault(); closeForm(); });
     ui.form.addEventListener('submit', saveForm);
     for (const name of ['click', 'dblclick', 'input', 'change', 'submit', 'pointerdown', 'pointermove', 'pointerup', 'mousedown', 'mouseup', 'contextmenu']) shadow.addEventListener(name, event => event.stopPropagation());
+    for (const name of ['keydown', 'keypress', 'keyup', 'beforeinput', 'compositionstart', 'compositionupdate', 'compositionend', 'copy', 'cut', 'paste', 'focusin', 'focusout']) {
+      ui.panel.addEventListener(name, event => event.stopPropagation());
+    }
     document.documentElement.appendChild(host);
     ui.banner.hidden = !enabled || bannerDismissed;
     return true;
@@ -260,7 +264,7 @@
     Object.assign(ui.outline.style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
   }
   function positionPanel() {
-    if (!selected || !ui || ui.panel.hidden) return;
+    if (!selected || !ui?.panel.open) return;
     if (!selected.element.isConnected) {
       ui.error.textContent = '页面已重绘，原控件已失效。请取消后重新选择。';
       ui.error.hidden = false;
@@ -282,8 +286,10 @@
   }
   function closeForm() {
     selected = null;
-    if (ui) { ui.panel.hidden = true; ui.outline.hidden = true; }
     highlighted = null;
+    if (!ui) return;
+    ui.outline.hidden = true;
+    if (ui.panel.open) ui.panel.close();
   }
   function showForm(element, clicked) {
     if (!createUI()) return;
@@ -300,10 +306,10 @@
     ui.error.textContent = '';
     const unique = candidates.find(candidate => candidate.matchCount === 1);
     ui.hint.textContent = unique ? '已找到当前页面内的唯一定位；仍会保存为待验证草稿。此处不会执行控件动作。' : '当前定位仍可能匹配多个位置；可保存草稿，使用前需补充范围并重新验证。';
-    ui.panel.hidden = false;
+    // Use the top layer so the site's modal or focus trap can't reclaim this field.
+    if (!ui.panel.open) ui.panel.showModal();
     paint(element);
     positionPanel();
-    requestAnimationFrame(() => { if (ui && selected) ui.description.focus({ preventScroll: true }); });
   }
   function saveForm(event) {
     event.preventDefault();
@@ -366,7 +372,11 @@
     showForm(element, clicked);
   }
   function onKeyDown(event) {
-    if (enabled && event.key === 'Escape' && selected) { event.preventDefault(); event.stopImmediatePropagation(); closeForm(); }
+    if (enabled && event.key === 'Escape' && !event.isComposing && ui?.panel.open) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeForm();
+    }
   }
   function listen(target, name, handler, options) {
     target.addEventListener(name, handler, options);
@@ -426,7 +436,7 @@
     return { ok: false, matchCount: bestCount, reason: bestCount > 1 ? 'multiple-matches' : 'no-unique-visible-match', message: '未找到符合类型的唯一可见控件；未选择 first/nth。' };
   }
   function state() {
-    return { version: VERSION, enabled, bannerVisible: Boolean(ui && !ui.banner.hidden), formOpen: Boolean(selected && ui && !ui.panel.hidden), support: 'ordinary-main-frame-only', limitations: ['iframe', 'shadow-dom', 'canvas', 'earlier-page-right-mouse-listeners'], message };
+    return { version: VERSION, enabled, bannerVisible: Boolean(ui && !ui.banner.hidden), formOpen: Boolean(selected && ui?.panel.open), support: 'ordinary-main-frame-only', limitations: ['iframe', 'shadow-dom', 'canvas', 'earlier-page-right-mouse-listeners'], message };
   }
   const api = { enable, disable, highlight, state };
   Object.defineProperty(api, '_resolveElement', { value: resolveElement, enumerable: false });
