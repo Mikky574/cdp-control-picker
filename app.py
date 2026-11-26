@@ -13,7 +13,7 @@ import shutil
 import sys
 import threading
 import tkinter as tk
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 from urllib.parse import urlsplit
 import uuid
 
@@ -25,7 +25,7 @@ from browser_launcher import launch_or_reuse
 RESOURCE_DIR = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
 SCRIPT = RESOURCE_DIR / 'page_picker.js'
 ICON = RESOURCE_DIR / 'assets' / 'app-icon.ico'
-VERSION = '0.2.0'
+VERSION = '0.2.1'
 BINDING = '__cdpControlPickerSave'
 SAVE_WAIT_MESSAGE = '正在保存标注，完成后再发送。'
 
@@ -68,16 +68,22 @@ class PickerApp:
         self.busy=False
         self.connection_generation=0
         self.settings_window=None
+        self.editor_window=None
+        self._page_records=[]
+        self._records_expanded=True
         self._refresh_selected_id=None
         self._drag_origin=None
         self._log_lock=threading.Lock()
         self._save_lock=threading.RLock()
+        self._workspace_lock=threading.RLock()
+        self._prepared_workspaces=set()
         self._pending_saves={}
         self._save_barriers={}
         self.exporting=False
         self.sending=False
         self._layout_specs={}
         self._layout_jobs={}
+        self._layout_delays={}
         self._layout_busy=set()
         self.endpoint=tk.StringVar(value=endpoint)
         self.workspace_path=tk.StringVar(value=str(workspace_path or default_workspace()))
@@ -89,6 +95,8 @@ class PickerApp:
         self.status=tk.StringVar(value='在专用 Chrome 登录网站，再刷新并选页。')
         self.capture_status=tk.StringVar(value='采集未开启')
         self.saved_status=tk.StringVar(value='选页后显示本页已保存标注')
+        self.sequence_ordered=tk.BooleanVar(value=False)
+        self.selection_status=tk.StringVar(value='选中控件可查看详情，双击可编辑。')
         self._build()
         for variable in (self.status,self.saved_status):
             variable.trace_add('write',lambda *_:self._queue_fit())
@@ -138,12 +146,33 @@ class PickerApp:
         self.disconnect_button=ttk.Button(actions,text='关闭',width=6,command=self.disconnect,state='disabled');self.disconnect_button.grid(row=0,column=1,padx=(6,0))
         self.status_label=tk.Label(body,textvariable=self.status,bg='#f5f7fa',fg='#526780',font=('Microsoft YaHei UI',9),wraplength=354,justify='left',anchor='w');self.status_label.grid(row=4,column=0,sticky='ew',pady=(6,0))
         self.saved_label=ttk.Label(body,textvariable=self.saved_status,foreground='#087b6b',font=('Microsoft YaHei UI',8),wraplength=354,justify='left',anchor='w');self.saved_label.grid(row=5,column=0,sticky='ew',pady=(4,0))
-        footer=ttk.Frame(body);footer.grid(row=6,column=0,sticky='ew',pady=(7,0));footer.columnconfigure(0,weight=1)
+        records_header=ttk.Frame(body);records_header.grid(row=6,column=0,sticky='ew',pady=(6,0))
+        ttk.Label(records_header,text='本页控件',font=('Microsoft YaHei UI',9,'bold')).pack(side='left')
+        self.records_toggle=ttk.Button(records_header,text='收起',width=5,style='Small.TButton',command=self.toggle_records);self.records_toggle.pack(side='right')
+        self.records_panel=ttk.Frame(body);self.records_panel.grid(row=7,column=0,sticky='ew',pady=(4,0));self.records_panel.columnconfigure(0,weight=1)
+        table=ttk.Frame(self.records_panel);table.grid(row=0,column=0,sticky='ew');table.columnconfigure(0,weight=1)
+        self.record_tree=ttk.Treeview(table,columns=('number','name','description'),show='headings',height=4,selectmode='browse')
+        for key,title,width in (('number','序号',38),('name','名称',105),('description','用途',178)):
+            self.record_tree.heading(key,text=title);self.record_tree.column(key,width=width,minwidth=width,stretch=key=='description')
+        self.record_tree.grid(row=0,column=0,sticky='ew')
+        scroll=ttk.Scrollbar(table,orient='vertical',command=self.record_tree.yview);scroll.grid(row=0,column=1,sticky='ns');self.record_tree.configure(yscrollcommand=scroll.set)
+        self.record_tree.bind('<<TreeviewSelect>>',lambda _event:self._record_selection_changed())
+        self.record_tree.bind('<Double-1>',lambda _event:self.edit_selected_record())
+        self.record_detail=ttk.Label(self.records_panel,textvariable=self.selection_status,foreground='#526780',wraplength=354,justify='left',anchor='w');self.record_detail.grid(row=1,column=0,sticky='ew',pady=(4,0))
+        record_tools=ttk.Frame(self.records_panel);record_tools.grid(row=2,column=0,sticky='ew',pady=(4,0))
+        self.edit_record_button=ttk.Button(record_tools,text='编辑',style='Small.TButton',command=self.edit_selected_record);self.edit_record_button.pack(side='left')
+        self.delete_record_button=ttk.Button(record_tools,text='删除',style='Small.TButton',command=self.delete_selected_record);self.delete_record_button.pack(side='left',padx=(4,0))
+        self.move_up_button=ttk.Button(record_tools,text='上移',style='Small.TButton',command=lambda:self.move_selected_record(-1));self.move_up_button.pack(side='left',padx=(4,0))
+        self.move_down_button=ttk.Button(record_tools,text='下移',style='Small.TButton',command=lambda:self.move_selected_record(1));self.move_down_button.pack(side='left',padx=(4,0))
+        self.sequence_check=ttk.Checkbutton(self.records_panel,text='按此顺序操作',variable=self.sequence_ordered,command=self.save_sequence_declaration);self.sequence_check.grid(row=3,column=0,sticky='w',pady=(4,0))
+        ttk.Label(self.records_panel,text='勾选后作为操作步骤发送；前置条件可在编辑中补充。',foreground='#526780',font=('Microsoft YaHei UI',8)).grid(row=4,column=0,sticky='w')
+        footer=ttk.Frame(body);footer.grid(row=8,column=0,sticky='ew',pady=(7,0));footer.columnconfigure(0,weight=1)
         self.send_button=ttk.Button(footer,text='发给 ZCode',style='Primary.TButton',command=self.send_page_to_zcode);self.send_button.grid(row=0,column=0,sticky='ew')
         self.export_button=ttk.Button(footer,text='复制交接说明',style='Small.TButton',command=self.export_page_task);self.export_button.grid(row=0,column=1,padx=(6,0),sticky='e')
         # Kept off-layout for backend compatibility; the actual field opens in Settings.
         self.endpoint_entry=ttk.Entry(r,textvariable=self.endpoint)
-        self._fit_window(r,body,380,210,wraps=(self.status_label,self.saved_label))
+        self._fit_window(r,body,380,210,wraps=(self.status_label,self.saved_label,self.record_detail))
+        self._record_selection_changed()
 
     def _fit_window(self,window,body,min_width,min_height,wraps=()):
         # Fonts and native DPI metrics may settle after the first geometry pass.
@@ -152,10 +181,22 @@ class PickerApp:
         self._layout_specs[key]=(window,body,min_width,min_height,tuple(wraps))
         window.bind('<Map>',lambda event:self._queue_fit(window) if event.widget is window else None,add='+')
         window.bind('<Configure>',lambda event:self._queue_fit(window) if event.widget is window else None,add='+')
+        window.bind('<Destroy>',lambda event:self._forget_window_layout(window) if event.widget is window else None,add='+')
         body.bind('<<ThemeChanged>>',lambda _event:self._queue_fit(window),add='+')
         self._apply_fit(key)
         self._queue_fit(window)
-        window.after(150,lambda:self._queue_fit(window))
+        def settle():
+            self._layout_delays.pop(key,None);self._queue_fit(window)
+        self._layout_delays[key]=window.after(150,settle)
+
+    def _forget_window_layout(self,window):
+        key=str(window)
+        for jobs in (self._layout_jobs,self._layout_delays):
+            pending=jobs.pop(key,None)
+            if pending:
+                try:window.after_cancel(pending)
+                except tk.TclError:pass
+        self._layout_specs.pop(key,None)
 
     def _queue_fit(self,window=None):
         window=window or self.root
@@ -217,18 +258,20 @@ class PickerApp:
     def _controls(self):
         connected=bool(self.client and self.client.connected)
         saving=bool(self._pending_save_count())
+        editing=bool(getattr(self,'editor_window',None))
         self.connect_button.configure(state='disabled' if self.connecting or self.closing or self.capture_enabled or saving else 'normal',text='采集中 · 请在网页右键' if self.capture_enabled else '开启右键采集' if connected else '连接并开启采集')
         self.disconnect_button.configure(state='normal' if connected and not self.connecting and not self.closing and not saving else 'disabled')
-        self.page_combo.configure(state='disabled' if connected or self.connecting else 'readonly')
-        self.send_button.configure(state='disabled' if self.sending or self.exporting or self.closing or saving else 'normal',text='正在交接…' if self.sending else '正在保存标注…' if saving else '发给 ZCode')
-        self.export_button.configure(state='disabled' if self.exporting or self.sending or self.closing or saving else 'normal')
+        self.page_combo.configure(state='disabled' if connected or self.connecting or editing else 'readonly')
+        self.send_button.configure(state='disabled' if self.sending or self.exporting or self.closing or saving or editing else 'normal',text='正在交接…' if self.sending else '正在保存标注…' if saving else '发给 ZCode')
+        self.export_button.configure(state='disabled' if self.exporting or self.sending or self.closing or saving or editing else 'normal')
         for widgets,disabled in ((getattr(self,'_settings_connection_controls',()),connected or self.connecting),
-                                 (getattr(self,'_settings_workspace_controls',()),connected or self.connecting or self.sending or self.exporting or saving),
+                                 (getattr(self,'_settings_workspace_controls',()),connected or self.connecting or self.sending or self.exporting or saving or bool(getattr(self,'editor_window',None))),
                                  (getattr(self,'_settings_zcode_controls',()),self.sending)):
             for widget in widgets:
                 try:
                     if widget.winfo_exists():widget.configure(state='disabled' if disabled else 'normal')
                 except tk.TclError:pass
+        if hasattr(self,'record_tree'):self._record_selection_changed()
         self._queue_fit()
 
     def _drain(self):
@@ -343,7 +386,9 @@ class PickerApp:
         try:
             selected=page_identity(target.get('url','') if target else '')
         except ValueError:
-            self.saved_status.set(f'共已保存 {len(self.records)} 项 · 选页后显示本页数量');return
+            self.saved_status.set(f'共已保存 {len(self.records)} 项 · 选页后显示本页数量')
+            if hasattr(self,'record_tree'):self._refresh_record_list(None)
+            return
         count=0
         for record in self.records.values():
             try:
@@ -351,6 +396,161 @@ class PickerApp:
             except ValueError:continue
             if (page['origin'],page['path'])==(selected['origin'],selected['path']):count+=1
         self.saved_status.set(f'本页已保存 {count} 项 · 仅含已落盘标注')
+        if hasattr(self,'record_tree'):self._refresh_record_list(selected)
+
+    def _selected_page(self):
+        index=self.page_combo.current()
+        target=self.current_target if self.client and self.client.connected else self.pages[index] if 0<=index<len(self.pages) else None
+        return page_identity(target.get('url','') if target else '')
+
+    def toggle_records(self):
+        self._records_expanded=not self._records_expanded
+        if self._records_expanded:self.records_panel.grid()
+        else:self.records_panel.grid_remove()
+        self.records_toggle.configure(text='收起' if self._records_expanded else '展开')
+        self._queue_fit()
+
+    def _refresh_record_list(self,page,select_id=None):
+        selected=select_id or (self.record_tree.selection() or [None])[0]
+        records=[];ordered=False
+        if page:
+            try:
+                workspace=self._workspace()
+                records=workspace.list_page_captures(page)
+                ordered=workspace.page_sequence(page)['ordered']
+            except Exception as error:
+                self._log('读取本页控件失败：'+str(error));self.status.set(self._safe_text(error,130))
+        self._page_records=records
+        self.sequence_ordered.set(ordered)
+        self.record_tree.delete(*self.record_tree.get_children())
+        for number,record in enumerate(records,1):
+            annotation=record.get('annotation') or {}
+            name=annotation.get('name') or record.get('control',{}).get('name') or '未命名控件'
+            self.record_tree.insert('', 'end',iid=record['captureId'],values=(number,self._safe_text(name,120),self._safe_text(annotation.get('description',''),500).replace('\n',' ')))
+        ids=[record['captureId'] for record in records]
+        if ids:
+            selected=selected if selected in ids else ids[0]
+            self.record_tree.selection_set(selected);self.record_tree.focus(selected);self.record_tree.see(selected)
+        self._record_selection_changed()
+
+    def _selected_record(self):
+        selected=(self.record_tree.selection() or [None])[0]
+        return next((record for record in self._page_records if record['captureId']==selected),None)
+
+    def _record_selection_changed(self):
+        record=self._selected_record()
+        blocked=self.exporting or self.sending or self.closing or bool(self._pending_save_count()) or bool(self.editor_window)
+        ids=[item['captureId'] for item in self._page_records]
+        index=ids.index(record['captureId']) if record else -1
+        for button,disabled in ((self.edit_record_button,not record),(self.delete_record_button,not record),
+                                (self.move_up_button,index<=0),(self.move_down_button,index<0 or index>=len(ids)-1)):
+            button.configure(state='disabled' if blocked or disabled else 'normal')
+        self.sequence_check.configure(state='disabled' if blocked or not ids else 'normal')
+        if record:
+            annotation=record.get('annotation') or {}
+            actions={'read':'读取','click':'点击','fill':'填写','select':'选择','check':'勾选'}
+            text='、'.join(actions.get(item,item) for item in annotation.get('allowedActions',[])) or '未注明动作'
+            expected=annotation.get('expectedResult') or '尚未填写'
+            self.selection_status.set(self._safe_text(f'{text} · {annotation.get("description","")}\n预期：{expected}',210))
+        else:self.selection_status.set('本页还没有标注，请在网页右键保存。')
+        self._queue_fit()
+
+    def _can_edit_records(self):
+        if self.exporting or self.sending or self.closing or self._pending_save_count():
+            self.status.set('正在保存或交接，请完成后再修改控件。');return False
+        if self.editor_window:
+            self.editor_window.lift();return False
+        return True
+
+    def _store_record_annotation(self,capture_id,annotation):
+        if self.exporting or self.sending or self.closing or self._pending_save_count():
+            raise RuntimeError('正在保存或交接，请完成后再保存修改。')
+        record=self._workspace().update_capture(capture_id,annotation)
+        self.records[capture_id]=record
+        self._update_saved_status()
+        self._refresh_record_list(self._selected_page(),capture_id)
+        self.status.set('已保存修改；下次发送将使用更新后的控件信息。')
+        return record
+
+    def edit_selected_record(self):
+        if not self._can_edit_records():return
+        record=self._selected_record()
+        if not record:return
+        capture_id=record['captureId'];annotation=record.get('annotation') or {}
+        w=tk.Toplevel(self.root);self.editor_window=w;w.title('编辑控件');w.resizable(False,False);w.transient(self.root);w.attributes('-topmost',True)
+        body=ttk.Frame(w,padding=12);body.pack(fill='both',expand=True);body.columnconfigure(0,weight=1)
+        name=tk.StringVar(value=annotation.get('name',''))
+        ttk.Label(body,text='名称').grid(row=0,column=0,sticky='w')
+        name_entry=ttk.Entry(body,textvariable=name,width=44);name_entry.grid(row=1,column=0,sticky='ew',pady=(2,6))
+        fields={}
+        for row,key,label,height in ((2,'description','功能说明',3),(4,'preconditions','前置条件（例如：先填写编号，再点查询）',2),(6,'expectedResult','预期结果',2)):
+            ttk.Label(body,text=label).grid(row=row,column=0,sticky='w')
+            text=tk.Text(body,height=height,width=44,wrap='word',font=('Microsoft YaHei UI',9),undo=True,relief='solid',borderwidth=1)
+            value=annotation.get(key,'');value='\n'.join(str(item) for item in value) if isinstance(value,list) else str(value)
+            text.insert('1.0',value);text.grid(row=row+1,column=0,sticky='ew',pady=(2,6));fields[key]=text
+        action_frame=ttk.Frame(body);action_frame.grid(row=8,column=0,sticky='w')
+        ttk.Label(action_frame,text='允许动作：').pack(side='left')
+        actions={key:tk.BooleanVar(value=key in annotation.get('allowedActions',[])) for key in ('read','click','fill','select','check')}
+        for key,label in (('read','读取'),('click','点击'),('fill','填写'),('select','选择'),('check','勾选')):
+            ttk.Checkbutton(action_frame,text=label,variable=actions[key]).pack(side='left')
+        control=record.get('control') or {};locators=control.get('selectors') or control.get('locatorCandidates') or []
+        location=safe_url(record.get('page',{}).get('url',''))
+        evidence='\n'.join(str(item.get('value') or item.get('selector') or item.get('role') or '') for item in locators[:3] if isinstance(item,dict))
+        ttk.Label(body,text='页面与定位证据（只读）',foreground='#526780').grid(row=9,column=0,sticky='w',pady=(8,2))
+        readonly=tk.Text(body,height=3,width=44,wrap='word',font=('Microsoft YaHei UI',8),background='#edf1f7',relief='flat')
+        readonly.insert('1.0',self._safe_text(location+'\n'+evidence,1400));readonly.configure(state='disabled');readonly.grid(row=10,column=0,sticky='ew')
+        error=tk.StringVar();error_label=ttk.Label(body,textvariable=error,foreground='#b42318',wraplength=400);error_label.grid(row=11,column=0,sticky='ew',pady=(5,0))
+        footer=ttk.Frame(body);footer.grid(row=12,column=0,sticky='ew',pady=(7,0))
+        def cancel():
+            self.editor_window=None;w.destroy();self._controls()
+        def save():
+            updated={key:text.get('1.0','end-1c').strip() for key,text in fields.items()}
+            updated.update(name=name.get().strip(),allowedActions=[key for key,value in actions.items() if value.get()])
+            if not updated['name'] or not updated['description']:
+                error.set('名称和功能说明不能为空。');self._queue_fit(w);return
+            if len(updated['name'])>120 or any(len(updated[key])>1500 for key in fields):
+                error.set('名称最多 120 字，其他字段各最多 1500 字。');self._queue_fit(w);return
+            try:self._store_record_annotation(capture_id,updated)
+            except Exception as failure:error.set(self._safe_text(failure,180));self._queue_fit(w);return
+            cancel()
+        ttk.Button(footer,text='取消',command=cancel).pack(side='right')
+        ttk.Button(footer,text='保存修改',style='Primary.TButton',command=save).pack(side='right',padx=(0,6))
+        w.protocol('WM_DELETE_WINDOW',cancel);w.grab_set();name_entry.focus_set();self._controls();self._fit_window(w,body,430,480,wraps=(error_label,))
+
+    def delete_selected_record(self):
+        if not self._can_edit_records():return
+        record=self._selected_record()
+        if not record:return
+        name=record.get('annotation',{}).get('name') or '这个控件'
+        if not messagebox.askyesno('删除本页控件',f'将“{self._safe_text(name,100)}”移入本地回收区？\n以后不再发送这项；已经发出的对话和旧交接包保留原快照。',parent=self.root):return
+        try:
+            self._workspace().delete_capture(record['captureId']);self.records.pop(record['captureId'],None)
+            self._update_saved_status();self.status.set('已移入本地回收区，下次发送不再包含这项。')
+        except Exception as error:self.status.set(self._safe_text(error,160))
+
+    def move_selected_record(self,direction):
+        if direction not in (-1,1) or not self._can_edit_records():return
+        record=self._selected_record()
+        if not record:return
+        ids=[item['captureId'] for item in self._page_records];index=ids.index(record['captureId']);destination=index+direction
+        if not 0<=destination<len(ids):return
+        ids[index],ids[destination]=ids[destination],ids[index]
+        try:
+            page=self._selected_page();self._workspace().set_page_sequence(page,ids,ordered=True)
+            self._refresh_record_list(page,record['captureId']);self.status.set('已调整操作顺序，下次发送会带上步骤。')
+        except Exception as error:self.status.set(self._safe_text(error,160))
+
+    def save_sequence_declaration(self):
+        if not self._can_edit_records():
+            try:self._refresh_record_list(self._selected_page())
+            except ValueError:pass
+            return
+        try:
+            page=self._selected_page();ids=[item['captureId'] for item in self._page_records]
+            self._workspace().set_page_sequence(page,ids,ordered=self.sequence_ordered.get())
+            self.status.set('已注明操作顺序；这表示你的流程说明，尚未执行验证。' if self.sequence_ordered.get() else '已取消操作顺序声明，列表仅供整理。')
+        except Exception as error:
+            self.status.set(self._safe_text(error,160));self._refresh_record_list(self._selected_page())
 
     def export_page_task(self):
         self._begin_page_task(send=False)
@@ -360,6 +560,8 @@ class PickerApp:
 
     def _begin_page_task(self,send=False):
         if self.exporting or self.sending:return
+        if getattr(self,'editor_window',None):
+            self.status.set('请先保存或取消当前控件修改，再发送。');self.editor_window.lift();return
         if self._pending_save_count():
             self.status.set(SAVE_WAIT_MESSAGE);self._controls();return
         index=self.page_combo.current()
@@ -448,6 +650,7 @@ class PickerApp:
         self.capture_status.set('采集未开启');self.status.set('已关闭采集；Chrome 与标签页保持原样。');self.endpoint_entry.configure(state='normal');self._controls()
 
     def on_close(self):
+        if self.editor_window:self.status.set('请先保存或取消当前控件修改，再退出。');self.editor_window.lift();return
         if self.sending:self.status.set('正在交接到 ZCode，请等待登记结果后再退出。');return
         if self.connecting:self.status.set('正在连接，请结束后再关闭浮窗。');return
         if self._pending_save_count():self.status.set('正在保存标注，请完成后再退出。');return
@@ -684,8 +887,11 @@ class PickerApp:
         if not (source / 'SKILL.md').is_file():
             raise RuntimeError('交付包缺少配套 CDP skill，请使用完整包。')
         durable = selected / '.capture-kit' / 'cdp-page-contract'
-        durable.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source, durable, dirs_exist_ok=True)
+        with self._workspace_lock:
+            if selected not in self._prepared_workspaces or not (durable / 'SKILL.md').is_file():
+                durable.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(source, durable, dirs_exist_ok=True)
+                self._prepared_workspaces.add(selected)
         return Workspace(selected, skill_path=durable / 'SKILL.md')
 
 
@@ -743,7 +949,7 @@ def main():
     args = parser.parse_args()
     if args.package_check:
         import websocket
-        report = {'version': VERSION, 'uiMode': 'floating', 'defaultWindowSize': [380, 210], 'automaticModelCalls': False, 'handoffBackend': 'app-server-with-desktop-index', 'permissionMode': 'yolo', 'permissionLabel': '完全访问', 'zcodeRunnerImported': 'zcode_runner' in sys.modules, 'pickerScriptExists': SCRIPT.is_file(), 'bundledSkillExists': (skill_source() / 'SKILL.md').is_file(), 'iconExists': ICON.is_file(), 'tkVersion': tk.TkVersion, 'websocketVersion': websocket.__version__, 'openedWindow': False, 'connectedBrowser': False}
+        report = {'version': VERSION, 'uiMode': 'floating', 'minimumCollapsedWindowSize': [380, 210], 'controlManagement': ['view', 'edit', 'soft-delete', 'reorder', 'declare-sequence'], 'automaticModelCalls': False, 'handoffBackend': 'app-server-with-desktop-index', 'permissionMode': 'yolo', 'permissionLabel': '完全访问', 'zcodeRunnerImported': 'zcode_runner' in sys.modules, 'pickerScriptExists': SCRIPT.is_file(), 'bundledSkillExists': (skill_source() / 'SKILL.md').is_file(), 'iconExists': ICON.is_file(), 'tkVersion': tk.TkVersion, 'websocketVersion': websocket.__version__, 'openedWindow': False, 'connectedBrowser': False}
         args.package_check.parent.mkdir(parents=True, exist_ok=True)
         args.package_check.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
         return

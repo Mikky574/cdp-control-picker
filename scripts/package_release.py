@@ -52,7 +52,7 @@ def package(version, executable, build_info, output):
     names = git('ls-tree', '-r', '--name-only', 'HEAD').decode('utf-8').splitlines()
     sources = {}
     forbidden = {'.git', '.local', '.venv', '__pycache__', 'captures', 'page-bundles',
-                 '.handoffs', '.desktop-bridge', 'CDP-Chrome-Profile', 'CDP-Picker-Workspace', '_build', 'dist'}
+                 '.handoffs', '.capture-kit', '.desktop-bridge', 'CDP-Chrome-Profile', 'CDP-Picker-Workspace', '_build', 'dist'}
     for name in names:
         path = Path(name)
         if forbidden.intersection(path.parts) or path.suffix.lower() in {'.exe', '.pyc', '.log', '.zip', '.key', '.pem', '.har', '.sqlite', '.sqlite3', '.db'}:

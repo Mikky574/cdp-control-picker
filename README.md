@@ -1,48 +1,48 @@
 # CDP 控件采集器
 
-Windows 小悬浮窗：在已登录的专用 Chrome 里右键标注控件，把同页保存的定位与用途发到 ZCode 对话。ZCode 读完后简短确认，接下来的信息和任务由你在那个对话中继续输入。
+Windows 小悬浮窗：在已登录的专用 Chrome 里右键标注控件，管理本页说明和先后顺序，再把完整上下文发到 ZCode 对话。ZCode 简短确认后，后续信息和任务由你在那个对话中继续输入。
 
-源码：[Mikky574/cdp-control-picker](https://github.com/Mikky574/cdp-control-picker)。当前版本为 **v0.2.0**。最新“只交接上下文并确认”的首轮、120项单元测试及EXE资源/归档检查已通过，见[验证记录](docs/cdp-picker-validation.md)及[已知问题](docs/known-issues.md)。[v0.1.0](https://github.com/Mikky574/cdp-control-picker/releases/tag/v0.1.0) 为旧面板单卡包。
+源码：[Mikky574/cdp-control-picker](https://github.com/Mikky574/cdp-control-picker)。**v0.2.1 新增本页控件管理。** 编辑、删除、排序和按需展开已有源码控件测试，数据与交接测试通过；[版本说明](docs/releases/v0.2.1.md)及[验证记录](docs/cdp-picker-validation.md)区分源码验证与成品资源检查。
 
-[下载 v0.2.0 Windows 便携包](https://github.com/Mikky574/cdp-control-picker/releases/download/v0.2.0/CDP-Control-Picker-v0.2.0.zip)。
+[v0.2.1 Windows 发布包](https://github.com/Mikky574/cdp-control-picker/releases/download/v0.2.1/CDP-Control-Picker-v0.2.1.zip)。
 
 ## 怎样使用
 
 1. 启动或复用固定专用 Chrome，由本人登录目标网站。
-2. 刷新并明确选页，连接后开启采集；右键需要的控件，填写名称、用途、允许动作和预期结果后分别保存。
-3. 点击“发给 ZCode”，把当前页已经保存的卡片合为页面包并交接。ZCode 首轮读取完整资料，简短确认控件和用途。
-4. 在 ZCode 对应项目打开这条对话，自行补充信息、继续提问或开始后续工作。相同标注已有对话时直接复用，不重新交接。
+2. 刷新并选页，连接后开启采集；右键需要的控件，填写说明并保存。同一页可标注多个。
+3. 展开“本页控件”，查看“序号 / 名称 / 用途”。选中后可编辑、删除、上移或下移。
+4. 需要说明前后关系时勾选“按此顺序操作”。上移或下移会自动勾选；取消勾选后，列表只作为排列。
+5. 点击“发给 ZCode”。完整包携带最新说明及顺序，模型读取后简短确认并等待你。到ZCode对应项目打开对话，自行继续工作。
 
-例如，标注“订单号输入框”和“查询按钮”后，首轮只确认收到这两个控件及用途。采集器不替你规划下一步，也不自动生成技能、页面约定或执行脚本；你以后可以自行在 ZCode 要求这些工作。
+“本页控件”可随时收起，主界面继续是小悬浮窗。设置和编辑按需打开，日志留在文件。
 
-“复制交接说明”只复制一句读取本包的任务，供你粘贴到已有对话。复制不等于已发送，消息有文件路径也不等于模型已读到正文。
+## 可以改什么
 
-页面包只含已保存标注，不记录全网页事件。保存顺序不代表操作流程，同页不代表同一业务对象。首轮不连接业务网站、不操作控件、不执行业务命令。
+编辑包含名称、功能说明、允许动作、前置条件、预期结果；名称和功能说明必填。名称是人的标注名称，页面地址、DOM/AX名称、selector等定位证据只读，修改说明不会改网页或冒充新采集证据。
 
-## 后台与边界
+删除确认后只移入本地回收区。旧页面包和已发ZCode对话保留当时快照，不会被新修改或删除回写。新卡默认按采集时间追加；勾选的次序是**用户声明的操作意图，尚未执行验证**。前置条件和预期结果也是说明，不是实际成功证据。
 
-主路径是安装版 `ZCode.exe` 的 Electron Node 模式运行同包 `zcode.cjs app-server --stdio`。用户保留本工具选定工作区/会话 **yolo 完全访问**；首轮任务仍只读取上下文并确认，不改其他项目、全局模型/认证或 Plaza 角色。
+“复制交接说明”只复制供你粘贴到已有对话的短任务，复制不等于发送。相同内容已有对话时复用；编辑说明、删除或顺序声明变化会作为更新后的上下文处理。
 
-后台不依赖桌面焦点。启动、刷新、标注不调用模型，点击“发给 ZCode”才提交交接任务。真实 SID、事件订阅与最终快照保留，协议 ACK 仅表示受理；模型确认、索引登记、GUI 可见分别核实。悬浮窗没有续聊输入框，不接管 ZCode 里的后续工作。
+## 交接的边界
 
-当前安装适配目标为 **ZCode 3.16.3.8992 / CLI 0.17.0**，不是跨版本保证。目标电脑需已有 Chrome 与 ZCode，最终便携包无需另装 Python/Node。实现见[交接说明](docs/zcode-handoff.md)和[Plaza 参考](docs/plaza-zcode-reference.md)。CLI -p runner 仅保留为源码 fallback。
+首轮只读完整控件上下文、简短确认并等待用户，不自动生成技能、脚本或后续计划，不点击/填写控件、不执行业务命令。“按此顺序操作”描述你的意图，不会触发执行。你以后可以自行在ZCode提出新任务。
 
-## 本地资料
+主路径为安装版 app-server stdio，保留本工具所选工作区/会话的 yolo“完全访问”，不改其他项目、全局模型/认证或Plaza角色。权限不扩大首轮任务。后台不依赖桌面焦点，启动、标注、编辑与排序不调用模型，点击“发给 ZCode”才提交交接。
 
-源码默认数据在 `.local/`；冻结 EXE 默认工作区与专用 profile 在 EXE 旁，设置目前仅本次运行生效。
+当前适配ZCode **3.16.3.8992 / CLI 0.17.0**，目标电脑需已有Chrome与ZCode，便携包无需另装Python/Node。只支持普通主frame；iframe、Shadow DOM和Canvas内部对象不在范围。见[交接说明](docs/zcode-handoff.md)、[产品说明](docs/cdp-control-picker.md)及[当前限制](docs/known-issues.md)。
 
-| 位置 | 内容 |
+## 本地资料与源码
+
+源码默认数据在.local/；冻结EXE的工作区和CDP-Chrome-Profile默认在EXE旁，设置仅本次运行生效。保留原目录可沿用仍有效的登录；过期时回同一专用Chrome重新登录。标注、回收资料、profile、完整会话、日志及索引备份都留本地，不入Git/Release。
+
+| 文件 | 职责 |
 |---|---|
-| `captures/cap-.../` | 单卡定位与用途，继续兼容 |
-| `page-bundles/page-.../` | 完整同页 page-bundle.json 与 context.md 交接入口 |
-| `.handoffs/handoff-.../` | 请求、真实 SID、状态、模型确认与登记回执 |
-| `.handoffs/index-backups/` | 索引写入前备份 |
-| `.logs/picker.log` | 采集与交接日志 |
-| `CDP-Chrome-Profile/` | 本人登录过的专用浏览器资料 |
-
-桌面栏目采用用户选择的**私有索引兼容登记，不是官方公开同步 API**。先核对版本/schema及真实会话，备份后窄范围写入；仅 ownership、同 SID/taskPath 匹配的本工具旧行可只改 mode，外来任务和其他列不动。旧 task.md、generation 字段和 generated/ 仅为格式兼容保留，当前交接不读取或执行旧生成任务。个人采集、profile、凭据、完整会话、日志和备份不入 Git/Release。
-
-## 开发入口
+| [app.py](app.py) | 小悬浮窗、本页列表与编辑入口 |
+| [page_picker.js](page_picker.js)、[workspace.py](workspace.py) | 右键采集、标注管理、软删除和同页顺序 |
+| [zcode_handoff.py](zcode_handoff.py)、[zcode_appserver.py](zcode_appserver.py) | 上下文交接与原生会话 |
+| [desktop_index.py](desktop_index.py) | 版本化私有索引兼容登记 |
+| [交接技能](skills/cdp-picker-handoff/SKILL.md) | 配置、顺序语义与首轮范围 |
 
 ~~~powershell
 python -m venv .venv
@@ -51,12 +51,4 @@ python -m venv .venv
 .venv\Scripts\python.exe -m unittest discover -s tests -v
 ~~~
 
-| 文件 | 职责 |
-|---|---|
-| [app.py](app.py) | 小悬浮窗、设置与发送入口 |
-| [page_picker.js](page_picker.js)、[workspace.py](workspace.py) | 右键标注、脱敏保存与同页合集 |
-| [zcode_handoff.py](zcode_handoff.py)、[zcode_appserver.py](zcode_appserver.py) | SID、订阅、首轮确认与结果 |
-| [desktop_index.py](desktop_index.py) | 版本化私有索引适配 |
-| [cdp-picker-handoff](skills/cdp-picker-handoff/SKILL.md) | 配置和上下文交接范围 |
-
-最新首轮用新虚构页面两张卡完成：模型只读取 context.md 和完整 page-bundle.json，正确确认“查看申请按钮”和“申请编号输入框”的定位用途后等待用户，索引登记成功，未生成文件或发起后续任务。完整120项单元测试通过；最新EXE --package-check退出0，JS/技能/图标齐备，归档含app-server客户端、索引、交接、工作区等7个关键模块，无DesktopBridge。资源检查不打开窗口、不连浏览器、不调用模型，独立于GUI实测。采集器验收止于送达回执，后续工作由用户自行决定；包哈希见随包SHA256SUMS.txt和BUILD-INFO.json。
+0.2.1完整测试共144项：143项通过，1项真实符号链接测试因Windows权限跳过，替代的最终文件门禁测试通过。其中11项新增UI/管理测试（8项fake、3项隐藏Tk）与15项交接fake测试覆盖对应流程；数据测试覆盖持久化、并发、快照和页间隔离。本版没有新增真实模型、浏览器或最终EXE的GUI端到端测试，0.2.0的真实交接证据单独保留。最新EXE资源检查退出0，五项控件管理入口及JS/技能/图标齐备；归档7模块和0.2.1主模块字节码检查通过。包哈希以对应版本的SHA256SUMS.txt和BUILD-INFO.json为准。

@@ -1,4 +1,5 @@
 """Background handoff tests use fake CLI and index; no model or user DB."""
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -135,6 +136,66 @@ class BackgroundHandoffTests(unittest.TestCase):
         self.assertEqual(first['sessionId'], second['sessionId'])
         self.assertTrue(second['duplicate'])
         self.assertEqual(len(self.server.calls), 1)
+
+    def test_legacy_fingerprint_is_unchanged_without_sequence_field(self):
+        payload = json.loads(Path(self.bundle['bundlePath']).read_text(encoding='utf-8'))
+        payload.pop('sequence', None)
+        Path(self.bundle['bundlePath']).write_text(json.dumps(payload), encoding='utf-8')
+        legacy_identity = {'page': payload.get('page'), 'captures': [
+            {'captureId': item.get('captureId'), 'sha256': (item.get('source') or {}).get('sha256'),
+             'capture': item.get('capture')} for item in payload['captures']]}
+        expected = hashlib.sha256(json.dumps(legacy_identity, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
+        self.assertEqual(self.handoff()._bundle(self.bundle)[-1], expected)
+
+    def test_control_edits_removal_order_and_explicit_sequence_change_fingerprint(self):
+        path = Path(self.bundle['bundlePath'])
+        original = json.loads(path.read_text(encoding='utf-8'))
+
+        def fingerprint(payload):
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+            return self.handoff()._bundle(self.bundle)[-1]
+
+        baseline = fingerprint(original)
+        variants = {}
+        for field, value in (('name', '更正后的控件名'), ('description', '更正后的功能说明')):
+            changed = json.loads(json.dumps(original))
+            changed['captures'][0]['capture']['annotation'][field] = value
+            variants[field] = changed
+        removed = json.loads(json.dumps(original))
+        removed['captures'].pop()
+        removed['captureCount'] = len(removed['captures'])
+        variants['delete'] = removed
+        reordered = json.loads(json.dumps(original))
+        reordered['captures'].reverse()
+        variants['reorder'] = reordered
+        for label, payload in variants.items():
+            with self.subTest(change=label):
+                self.assertNotEqual(fingerprint(payload), baseline)
+
+        unordered = json.loads(json.dumps(original))
+        unordered['sequence'] = {'ordered': False,
+                                 'captureIds': [item['captureId'] for item in original['captures']]}
+        ordered = json.loads(json.dumps(unordered))
+        ordered['sequence']['ordered'] = True
+        self.assertNotEqual(fingerprint(unordered), baseline)
+        self.assertNotEqual(fingerprint(unordered), fingerprint(ordered))
+        self.assertEqual(fingerprint(ordered), fingerprint(json.loads(json.dumps(ordered))))
+
+    def test_sequence_only_change_submits_once_and_identical_export_is_duplicate(self):
+        path = Path(self.bundle['bundlePath'])
+        payload = json.loads(path.read_text(encoding='utf-8'))
+        payload['sequence'] = {'ordered': False}
+        path.write_text(json.dumps(payload), encoding='utf-8')
+        first = self.handoff().send(self.bundle)
+        self.assertEqual(first['status'], 'registered')
+        payload['sequence']['ordered'] = True
+        path.write_text(json.dumps(payload), encoding='utf-8')
+        second = self.handoff().send(self.bundle)
+        self.assertEqual(second['status'], 'registered')
+        self.assertNotEqual(first['fingerprint'], second['fingerprint'])
+        duplicate = self.handoff().send(self.bundle)
+        self.assertTrue(duplicate['duplicate'])
+        self.assertEqual(len(self.server.calls), 2)
 
     def test_index_failure_retries_only_registration_and_preserves_session(self):
         self.index.failure = True

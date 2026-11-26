@@ -97,6 +97,10 @@ class ZCodeHandoff:
         identity = {'page': payload.get('page'), 'captures': [
             {'captureId': item.get('captureId'), 'sha256': (item.get('source') or {}).get('sha256'),
              'capture': item.get('capture')} for item in captures]}
+        # New bundles can explicitly attach order/workflow semantics. Keep the
+        # legacy identity unchanged when that field is absent.
+        if 'sequence' in payload:
+            identity['sequence'] = payload['sequence']
         fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
         context = self._inside(bundle['contextPath']) if bundle.get('contextPath') else None
         if context is not None and (not context.is_file() or context.parent != task.parent):

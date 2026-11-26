@@ -6,6 +6,7 @@
 /page-bundles/
 /.logs/
 **/.handoffs/
+**/.capture-kit/
 **/.desktop-bridge/
 **/profile/
 **/profiles/

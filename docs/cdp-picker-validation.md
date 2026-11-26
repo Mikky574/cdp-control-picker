@@ -1,8 +1,26 @@
-# CDP 控件采集器验证记录
+# CDP控件采集器验证记录
 
-核对日期：2026-11-26。**v0.2.0版本校验通过。** 当前目标只打通控件上下文与ZCode对话；最新首轮只读取完整包、简短确认并等待用户，不自动生成能力文件或后续计划。
+核对日期：2026-11-26。0.2.1增加本页标注管理。新增源码控件、数据和fake交接验证如下，0.2.0及更早真实运行结果在后文按版本保留。
 
-## 当前上下文交接与资源检查
+## 0.2.1新增功能验证
+
+| 验证项 | 结果 |
+|---|---|
+| UI/管理测试 | 11项通过：8项fake、3项真实withdrawn Tk测试，不打开可见最终EXE窗口 |
+| 真实widget流程 | Treeview编辑保存、软删除、上下移动、ordered勾选、未保存与busy barrier、弹窗回调清理通过 |
+| 布局请求尺寸 | 隐藏Tk测得展开内容412×502、收起内容284×267，主窗最小宽380；编辑弹窗最小430×480 |
+| 数据状态 | 同页隔离、原capture.json/description.md/旧bundle不变、overlay持久化、7实例并发不丢、损坏state fail-closed通过 |
+| handoff | 15项fake通过，含编辑/删除/sequence/ordered变化参与去重，以及旧包兼容 |
+| 完整测试 | Ran144 / 15.284秒，OK(skipped=1)：143项通过；真实symlink因Windows权限跳过，替代最终文件门禁测试通过 |
+| 构建一致性 | EXE构建完成，输入源码hash前后一致；不在本文硬编码包哈希 |
+| EXE资源检查 | --package-check退出0；version0.2.1，controlManagement5项皆在，floating、yolo“完全访问”、JS/技能/图标均存在；openedWindow=false、connectedBrowser=false、automaticModelCalls=false |
+| 归档检查 | 实际CArchive/PYZ包含7个关键模块，无DesktopBridge；app字节码含版本0.2.1和5个新增管理/生命周期方法 |
+
+隐藏Tk使用真实控件并执行主线程回调，但不是最终冻结EXE的可见窗口人工预览。本版未新增真实CLI/模型、浏览器或GUI端到端测试；此前0.2.0的真实上下文送达和ZCode对话证据不冒充本版新增功能实测。
+
+用户声明顺序、前置条件、预期结果均非执行证据。sequence.executionValidated和recording.workflowExecutionValidated均为false；recording.orderIsWorkflow跟随ordered表示用户声明，不能读成实际执行成功。首轮仍只读完整上下文并确认，不生成文件或触发业务步骤。
+
+## 0.2.0已完成的上下文交接与资源检查
 
 按钮为“发给 ZCode”，复制为“复制交接说明”。app-server stdio、本工具选定工作区/会话yolo、真实SID与私有索引机制保留，用户后续自行在ZCode对话中添加任务。
 

@@ -18,9 +18,17 @@
 
 ## 人的操作
 
-刷新后明确选页，再连接并开启采集；多个同址页签不取第一个。同页分别右键保存控件名、用途、允许动作和预期结果，再点击“发给 ZCode”。“复制交接说明”提供读取本包的短任务，供人粘贴到已有会话；复制本身不提交模型。
+刷新后明确选页，再连接并开启采集；多个同址页签不取第一个。同页分别右键保存控件名、用途、允许动作和预期结果，可展开“本页控件”，再点击“发给 ZCode”。“复制交接说明”提供读取本包的短任务，供人粘贴到已有会话；复制本身不提交模型。
 
 合包按规范化 origin/path 或 file URL/path，忽略 query/hash，业务键仍需保留。只支持普通主 frame DOM；iframe、Shadow DOM、Canvas 内部对象不在范围。
+
+## 本页标注与顺序
+
+“本页控件”可展开/收起，列表显示序号、名称、用途。编辑弹窗可改名称、功能说明、允许动作、前置条件、预期结果；界面保存要求名称与功能说明非空，名称最多120字、其他文本字段最多1500字，页面地址与定位证据只读。编辑存于.capture-kit/page-state.json覆盖层，load/list/export合并最新annotation；原capture.json、description.md、page/control/createdAt和原始文件SHA不改，不把手写名称当作真实AX名称。删除需确认，仅移入本地回收区；旧交接包和已发会话仍是当时快照。
+
+默认createdAt升序，新卡追加。上移/下移调整本页持久顺序并勾选“按此顺序操作”；也可取消勾选，只保留排列。勾选只声明人的步骤意图，不代表已验证或已经执行。发送携带sequence，按[交接字段说明](handoff.md)解释。
+
+数据接口为list_page_captures(page)、page_sequence(page)、set_page_sequence(page,capture_ids,ordered=True)、update_capture(id,annotation)、delete_capture(id)，恢复接口restore_capture(id)。set_page_sequence须完整且恰好覆盖本页所有活动卡；update只接受annotation，description非空，preconditions等可为字符串或字符串列表。不要通过这些接口改定位证据、跨页排序或删除旧交接快照。
 
 ## 后台与首轮任务
 

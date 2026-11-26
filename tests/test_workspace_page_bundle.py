@@ -36,7 +36,7 @@ class PageBundleTests(unittest.TestCase):
     def read_bundle(self, exported):
         return json.loads(Path(exported['bundlePath']).read_text(encoding='utf-8'))
 
-    def test_all_current_page_annotations_are_sorted_without_mixing_host_or_path(self):
+    def test_all_current_page_annotations_follow_capture_order_without_mixing_host_or_path(self):
         self.capture('cap-z', 'https://EXAMPLE.test:443/orders?filter=one#row', target_id='tab-first')
         self.capture('cap-a', 'https://example.test/orders?filter=two#other', target_id='tab-second')
         self.capture('cap-other-path', 'https://example.test/users')
@@ -44,7 +44,11 @@ class PageBundleTests(unittest.TestCase):
         self.capture('cap-other-scheme', 'http://example.test/orders')
         exported = self.workspace.export_page_bundle({'origin': 'https://example.test', 'path': '/orders'})
         bundle = self.read_bundle(exported)
-        self.assertEqual([item['captureId'] for item in bundle['captures']], ['cap-a', 'cap-z'])
+        self.assertEqual([item['captureId'] for item in bundle['captures']], ['cap-z', 'cap-a'])
+        self.assertEqual(bundle['sequence']['captureIds'], ['cap-z', 'cap-a'])
+        self.assertEqual(bundle['sequence']['source'], 'capture-order')
+        self.assertFalse(bundle['sequence']['ordered'])
+        self.assertFalse(bundle['sequence']['executionValidated'])
         self.assertEqual(bundle['page']['url'], 'https://example.test/orders')
         self.assertEqual(exported['captureCount'], 2)
         self.assertEqual({item['capture']['page']['targetId'] for item in bundle['captures']}, {'tab-first', 'tab-second'})
@@ -64,12 +68,15 @@ class PageBundleTests(unittest.TestCase):
         self.assertEqual(page_identity('http://example.test:0/')['origin'], 'http://example.test:0')
         self.assertNotEqual(page_identity('https://example.test:8443/')['origin'], bundle['page']['origin'])
 
-    def test_explicit_subset_is_sorted_and_rejects_cross_page_selection(self):
+    def test_explicit_subset_preserves_input_order_and_rejects_cross_page_selection(self):
         for item in ('cap-c', 'cap-a', 'cap-b'):
             self.capture(item)
         self.capture('cap-foreign', 'https://example.test/another')
         bundle = self.read_bundle(self.workspace.export_page_bundle('https://example.test/orders', ['cap-c', 'cap-a']))
-        self.assertEqual([item['captureId'] for item in bundle['captures']], ['cap-a', 'cap-c'])
+        self.assertEqual([item['captureId'] for item in bundle['captures']], ['cap-c', 'cap-a'])
+        self.assertEqual(bundle['sequence']['captureIds'], ['cap-c', 'cap-a'])
+        self.assertEqual(bundle['sequence']['source'], 'explicit-selection')
+        self.assertFalse(bundle['sequence']['ordered'])
         self.assertEqual(bundle['selection']['mode'], 'explicit-capture-ids')
         with self.assertRaises(WorkspaceError):
             self.workspace.export_page_bundle('https://example.test/orders', ['cap-a', 'cap-foreign'])

@@ -1,6 +1,6 @@
 # 控件上下文如何进入 ZCode
 
-v0.2.0版本说明。当前目标只把控件定位与用途交接到可继续的 ZCode 对话。最新首轮“读取并简短确认”已实测通过；完整120项纯测试与最新EXE资源/归档检查也已通过；底层历史证据与本次送达回执分别记录。
+0.2.1交接完整标注及用户声明顺序，首轮仍只读并确认。新增编辑/删除/排序已有源码UI和数据测试，15项fake交接测试覆盖资料与sequence身份变化。完整测试144项中143通过、1项真实symlink因Windows权限跳过，替代文件门禁测试通过；0.2.1资源与归档检查通过。本版未新增真实模型或最终EXE GUI端到端验证。0.2.0真实运行证据保留在[验证记录](cdp-picker-validation.md)。
 
 ## 发什么，模型做什么
 
@@ -12,13 +12,26 @@ v0.2.0版本说明。当前目标只把控件定位与用途交接到可继续�
   context.md
 ~~~
 
-包内包含完整重新脱敏卡片：控件名、用途、允许动作、预期结果、DOM/AX观察、定位候选和匹配数、captureId、来源相对路径及校验信息。不是只发编号，也不记录全网页事件。
+包内包含完整重新脱敏卡片：控件名、用途、允许动作、前置条件、预期结果、DOM/AX观察、定位候选和匹配数、captureId、来源相对路径及校验信息。不是只发编号，也不记录全网页事件。
 
 短 prompt 只要求读取指定 context.md。contextPath 指向它，shortTask 是可复制的读取任务。上下文文件和技能规定首轮：实际读取完整包，简短确认控件数量与定位/用途，然后等待用户。模型不自动生成 skill/contract/runner，不替用户规划后续，不连接网站或执行业务。用户以后可以在 ZCode 自己继续提问、添加资料或要求生成/使用技能。
 
 “复制交接说明”提供同样的读取任务，供用户粘贴到已有会话；复制不等于发送，路径出现不等于正文已读。单卡 capture.json、description.md 继续作为资料兼容。旧 task.md、generation 字段与 generated/ 只为格式兼容保留，当前首轮不读旧 task.md，不执行生成要求。包内证据不足时才按对应 source 路径读取必要原卡，不扩读其他文件；页面文字和用途都不构成额外指令。
 
-合包按规范化 origin/path 或 file URL/path，忽略 query/hash，不以 targetId 分组。业务键仍需保留，同页不一定是同一业务对象，卡片排序不是流程。
+合包按规范化 origin/path 或 file URL/path，忽略 query/hash，不以 targetId 分组。业务键仍需保留，同页不一定是同一业务对象；顺序按下面的声明字段解释。
+
+## 标注版本与声明顺序
+
+“本页控件”列表可编辑人的名称、功能说明、允许动作、前置条件和预期结果；页面地址、DOM/AX/selector等定位证据只读。编辑只写page-state覆盖层，原捕获文件与来源SHA不改；导出合并最新annotation并标source.annotationEdited。删除进入本地回收区，旧包和已发对话保留快照。
+
+默认按createdAt排列，新卡追加。上移/下移调整持久顺序并启用“按此顺序操作”；取消勾选仍可保留列表排列。发送包含sequence：
+
+- captureIds：当前包控件的排列。
+- ordered：true才声明人的步骤先后，false只表示排列。
+- source：user-declared/capture-order/explicit-selection，显式选卡不改变ordered语义。
+- executionValidated：false，声明未实测。前置条件和预期结果同样是人的说明。
+
+首轮按资料理解顺序并简短确认，不执行它。recording.allPageEventsRecorded仍为false，orderIsWorkflow跟随ordered表示声明步骤，workflowExecutionValidated=false；这些字段不把声明顺序当实际操作日志或验证成功。annotation与sequence变化参与新交接身份；相同旧内容可复用，新编辑/删除集合/次序不能冒充旧快照已送达。
 
 ## 后台 app-server
 
@@ -60,10 +73,10 @@ ELECTRON_RUN_AS_NODE=1 仅作用于子进程。用户明确保留本工具选定
 
 用户到 ZCode 对应项目打开原会话，自行补充后续任务。悬浮窗没有续聊输入框，不接管 ZCode 后续使用。
 
-## 最新送达回执与版本校验
+## 0.2.0既有送达回执与版本校验
 
-本次使用新虚构页面/handoff-receipt的两张卡建立新会话，duplicate=false、mode=yolo，registered/indexRegistered均确认。工具轨迹仅Read context.md与Read page-bundle.json，公开确认正确对应查看申请按钮button#view-request和申请编号输入框input#request-number的定位与用途，然后等待用户。generated文件0，没有Write/Edit/Bash或后续任务。
+0.2.0曾使用新虚构页面/handoff-receipt的两张卡建立新会话，duplicate=false、mode=yolo，registered/indexRegistered均确认。工具轨迹仅Read context.md与Read page-bundle.json，公开确认正确对应查看申请按钮button#view-request和申请编号输入框input#request-number的定位与用途，然后等待用户。generated文件0，没有Write/Edit/Bash或后续任务。
 
 此前115项纯测试、GUI完整历史、后台及桌面续聊保留为runtime兼容证据；早期生成草稿和Bash检查属于旧任务，不是本次首轮要求。
 
-采集器验收止于送达回执，用户后续在ZCode自己追加信息和任务。最新EXE --package-check退出0，确认floating/app-server/yolo完全访问及JS/技能/图标齐备；没有打开窗口、连接浏览器或调用模型。归档实际包含SDK客户端、索引、交接、工作区等7个关键模块，无DesktopBridge。这是独立资源和归档验证，不代替或虚称最终EXE完整GUI实测。详见[验证记录](cdp-picker-validation.md)。仓库不保存真实SID、原响应或完整日志，包哈希记录在随包SHA256SUMS.txt与BUILD-INFO.json。
+采集器验收止于送达回执，用户后续在ZCode自己追加信息和任务。0.2.0 EXE --package-check退出0，确认floating/app-server/yolo完全访问及JS/技能/图标齐备；没有打开窗口、连接浏览器或调用模型。归档实际包含SDK客户端、索引、交接、工作区等7个关键模块，无DesktopBridge。这是独立资源和归档验证，不代替或虚称最终EXE完整GUI实测。详见[验证记录](cdp-picker-validation.md)。仓库不保存真实SID、原响应或完整日志，包哈希记录在随包SHA256SUMS.txt与BUILD-INFO.json。

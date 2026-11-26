@@ -1,5 +1,6 @@
 """Isolated SQLite fixtures only; never opens the user's ZCode databases."""
 from pathlib import Path
+from contextlib import closing, contextmanager
 import json
 import os
 import sqlite3
@@ -52,6 +53,14 @@ INSERT INTO message VALUES('unrelated','sess_unrelated','Fixture body must not b
 """
 
 
+@contextmanager
+def fixture_database(path):
+    # sqlite3.Connection.__exit__ commits/rolls back but does not close handles.
+    # Explicit closing keeps fixture cleanup deterministic on Windows.
+    with closing(sqlite3.connect(path)) as connection, connection:
+        yield connection
+
+
 class DesktopIndexTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="picker-index-test-")
@@ -65,7 +74,7 @@ class DesktopIndexTests(unittest.TestCase):
         self.db_path = self.base / "fixture tasks-index.sqlite"
         self.create_database(self.db_path)
         self.cli_db_path = self.base / "fixture CLI.sqlite"
-        with sqlite3.connect(self.cli_db_path) as db:
+        with fixture_database(self.cli_db_path) as db:
             db.executescript(CLI_DDL)
 
     def tearDown(self):
@@ -74,7 +83,7 @@ class DesktopIndexTests(unittest.TestCase):
     @staticmethod
     def create_database(path):
         path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(path) as db:
+        with fixture_database(path) as db:
             db.executescript(DDL)
 
     def adapter(self, **options):
@@ -88,20 +97,20 @@ class DesktopIndexTests(unittest.TestCase):
                  execution=None):
         directory = str(self.workspace) if directory is None else directory
         state = {"mode": mode, "planEnabled": plan} if execution is None else execution
-        with sqlite3.connect(self.cli_db_path) as db:
+        with fixture_database(self.cli_db_path) as db:
             db.execute("INSERT INTO session VALUES(?,?,?,?,?,?)", (session_id, directory, workspace_id, parent_id, task_type, deleted))
             db.execute("INSERT INTO session_entry VALUES(?,?,'runtime/execution_state',10,20,?)", (session_id + ":execution", session_id, json.dumps(state)))
             if linked:
                 db.execute("INSERT INTO session_task_link VALUES(?,?)", (session_id + ":link", session_id))
 
     def query(self, sql, args=()):
-        with sqlite3.connect(self.db_path) as db:
+        with fixture_database(self.db_path) as db:
             db.row_factory = sqlite3.Row
             return [dict(row) for row in db.execute(sql, args)]
 
     def seed_project(self, project_id="project-existing", root=None, name="My renamed project"):
         root = str(root or self.workspace)
-        with sqlite3.connect(self.db_path) as db:
+        with fixture_database(self.db_path) as db:
             db.execute("INSERT INTO projects(project_id,host_id,name,name_overridden,position,pinned,created_at,updated_at) VALUES(?,'local',?,1,7,1,100,200)", (project_id, name))
             db.execute("INSERT INTO project_roots VALUES(?,?,0,1)", (project_id, root))
         return project_id
@@ -138,7 +147,7 @@ class DesktopIndexTests(unittest.TestCase):
         self.assertEqual(json.loads(row["meta_json"])["cdpControlPicker"]["taskPath"], "task.md")
         backup = Path(result["backupPath"])
         self.assertTrue(backup.is_relative_to(self.workspace / ".handoffs" / "index-backups"))
-        with sqlite3.connect(backup) as db:
+        with fixture_database(backup) as db:
             self.assertEqual(db.execute("PRAGMA quick_check").fetchone()[0], "ok")
             self.assertEqual(db.execute("SELECT count(*) FROM tasks").fetchone()[0], 0)
         self.assertEqual(self.query("SELECT * FROM unrelated_data"), [{"id": "fixture", "payload": "keep this unrelated metadata"}])
@@ -171,7 +180,7 @@ class DesktopIndexTests(unittest.TestCase):
         self.seed_cli("sess_foreign")
         project = self.seed_project()
         foreign = str(self.base / "another workspace")
-        with sqlite3.connect(self.db_path) as db:
+        with fixture_database(self.db_path) as db:
             db.execute("INSERT INTO tasks(workspace_key,workspace_path,task_id,title,created_at,updated_at,host_id,root_path,project_id,cli_created_at) VALUES(?,?,?,'User task',1,2,'local',?,?,1)", (foreign, foreign, "sess_foreign", foreign, project))
         before = self.query("SELECT * FROM tasks")
         with self.assertRaises(DesktopIndexError):
@@ -185,7 +194,7 @@ class DesktopIndexTests(unittest.TestCase):
             session = "sess_" + flag
             self.seed_cli(session)
             adapter.register(session, title="User action fixture")
-            with sqlite3.connect(self.db_path) as db:
+            with fixture_database(self.db_path) as db:
                 db.execute("UPDATE tasks SET " + flag + "=1 WHERE task_id=?", (session,))
             before = self.query("SELECT * FROM tasks WHERE task_id=?", (session,))
             with self.subTest(flag=flag), self.assertRaises(DesktopIndexError):
@@ -195,7 +204,7 @@ class DesktopIndexTests(unittest.TestCase):
     def test_schema_version_and_unique_constraint_changes_fail_before_write(self):
         with self.assertRaises(DesktopIndexError):
             self.adapter(desktop_version="3.17.0.1")
-        with sqlite3.connect(self.db_path) as db:
+        with fixture_database(self.db_path) as db:
             db.execute("DROP INDEX idx_tasks_host_task")
         with self.assertRaises(DesktopIndexError):
             self.adapter().register("sess_no_constraint", title="Draft")
@@ -203,7 +212,7 @@ class DesktopIndexTests(unittest.TestCase):
         self.assertFalse((self.workspace / ".handoffs").exists())
         self.db_path = self.base / "future schema.sqlite"
         self.create_database(self.db_path)
-        with sqlite3.connect(self.db_path) as db:
+        with fixture_database(self.db_path) as db:
             db.execute("ALTER TABLE tasks ADD COLUMN unknown_future_field TEXT")
         with self.assertRaises(DesktopIndexError):
             self.adapter().preflight()
@@ -256,7 +265,7 @@ class DesktopIndexTests(unittest.TestCase):
             writer.commit()
             self.assertTrue(Path(str(self.db_path) + "-wal").is_file())
             result = self.adapter().register("sess_wal_backup", title="Draft")
-            with sqlite3.connect(result["backupPath"]) as backup:
+            with fixture_database(result["backupPath"]) as backup:
                 self.assertEqual(backup.execute("SELECT payload FROM unrelated_data WHERE id='wal-only'").fetchone()[0], "committed in WAL")
                 self.assertEqual(backup.execute("SELECT count(*) FROM tasks").fetchone()[0], 0)
         finally:
@@ -269,7 +278,7 @@ class DesktopIndexTests(unittest.TestCase):
         with patch.dict(os.environ, {"ZCODE_DATA_BASE_DIR": str(data_base)}), patch("desktop_index._product_version", return_value=SUPPORTED_VERSION) as read_version:
             cli_path = data_base / ".zcode" / "cli" / "db" / "db.sqlite"
             cli_path.parent.mkdir(parents=True)
-            with sqlite3.connect(cli_path) as cli:
+            with fixture_database(cli_path) as cli:
                 cli.executescript(CLI_DDL)
             adapter = DesktopTaskIndex(self.workspace, self.exe)
             self.assertEqual(adapter.index, expected)
@@ -327,7 +336,7 @@ class DesktopIndexTests(unittest.TestCase):
         self.assertEqual(result["projectId"], project)
         row = self.query("SELECT * FROM tasks")[0]
         self.assertEqual((row["workspace_key"], row["workspace_path"], row["root_path"]), (native_directory, native_directory, stored_root))
-        with sqlite3.connect(self.cli_db_path) as cli:
+        with fixture_database(self.cli_db_path) as cli:
             cli.execute("UPDATE session SET directory=? WHERE id='sess_native_alias'", (str(self.workspace),))
         before = self.query("SELECT * FROM tasks")
         with self.assertRaises(DesktopIndexError):
@@ -347,7 +356,7 @@ class DesktopIndexTests(unittest.TestCase):
                 self.adapter().register(session_id, title="Mode mismatch")
         self.seed_cli("sess_no_execution")
         self.seed_cli("sess_bad_json")
-        with sqlite3.connect(self.cli_db_path) as cli:
+        with fixture_database(self.cli_db_path) as cli:
             cli.execute("DELETE FROM session_entry WHERE session_id='sess_no_execution'")
             cli.execute("UPDATE session_entry SET data='invalid JSON' WHERE session_id='sess_bad_json'")
         for session_id in ("sess_no_execution", "sess_bad_json"):
@@ -359,7 +368,7 @@ class DesktopIndexTests(unittest.TestCase):
     def test_latest_execution_metadata_is_used_without_selecting_conversation_or_model_rows(self):
         session_id = "sess_latest_execution"
         self.seed_cli(session_id, mode="edit")
-        with sqlite3.connect(self.cli_db_path) as cli:
+        with fixture_database(self.cli_db_path) as cli:
             cli.execute("INSERT INTO session_entry VALUES(?,?,'runtime/execution_state',30,30,?)", ("newer-execution", session_id, json.dumps({"mode": "yolo", "planEnabled": False})))
             cli.execute("INSERT INTO session_entry VALUES(?,?,'runtime/model_selection',100,100,?)", ("model-must-not-be-read", session_id, "sensitive fixture metadata"))
         adapter = self.adapter()
@@ -388,7 +397,7 @@ class DesktopIndexTests(unittest.TestCase):
         self.assertFalse(missing.exists())
         for number, change in enumerate(("DROP TABLE session_task_link", "ALTER TABLE session_entry RENAME COLUMN data TO unknown_data", "ALTER TABLE session RENAME COLUMN time_deleted TO unknown_deleted")):
             path = self.base / ("unknown-cli-" + str(number) + ".sqlite")
-            with sqlite3.connect(path) as cli:
+            with fixture_database(path) as cli:
                 cli.executescript(CLI_DDL)
                 cli.execute(change)
             with self.subTest(change=change), self.assertRaises(DesktopIndexError):
@@ -406,7 +415,7 @@ class DesktopIndexTests(unittest.TestCase):
         def change_identity(*args):
             calls.append(1)
             if len(calls) == 2:
-                with sqlite3.connect(self.cli_db_path) as cli:
+                with fixture_database(self.cli_db_path) as cli:
                     cli.execute("UPDATE session SET directory=? WHERE id=?", (str(self.workspace) + os.sep + ".", session_id))
             return original(*args)
 
@@ -421,9 +430,9 @@ class DesktopIndexTests(unittest.TestCase):
         self.seed_cli(session_id, mode="edit")
         adapter = self.adapter()
         adapter.register(session_id, title="Original owned task", task_path=self.task, mode="edit")
-        with sqlite3.connect(self.db_path) as index:
+        with fixture_database(self.db_path) as index:
             index.execute("UPDATE tasks SET pinned=1,title='User renamed title',sort_order=17,unread_at=321 WHERE task_id=?", (session_id,))
-        with sqlite3.connect(self.cli_db_path) as cli:
+        with fixture_database(self.cli_db_path) as cli:
             cli.execute("UPDATE session_entry SET data=? WHERE session_id=?", (json.dumps({"mode": "yolo", "planEnabled": False}), session_id))
         before = self.query("SELECT * FROM tasks")[0]
         with self.assertRaisesRegex(DesktopIndexError, "模式"):
@@ -433,7 +442,7 @@ class DesktopIndexTests(unittest.TestCase):
         self.assertFalse(result["created"])
         self.assertEqual(result["mode"], "yolo")
         self.assertEqual(self.query("SELECT * FROM tasks"), [{**before, "mode": "yolo"}])
-        with sqlite3.connect(result["backupPath"]) as backup:
+        with fixture_database(result["backupPath"]) as backup:
             backup.row_factory = sqlite3.Row
             self.assertEqual(dict(backup.execute("SELECT * FROM tasks WHERE task_id=?", (session_id,)).fetchone()), before)
         repeated = adapter.register(session_id, title="Do not replace", task_path=self.task, update_owned_mode=True)
@@ -447,9 +456,9 @@ class DesktopIndexTests(unittest.TestCase):
             adapter = self.adapter()
             adapter.register(session_id, title="Existing task", task_path=self.task, mode="edit")
             metadata = {} if marker is None else {"cdpControlPicker": {**marker, **({"sessionId": session_id} if marker.get("sessionId") == "SELF" else {})}}
-            with sqlite3.connect(self.db_path) as index:
+            with fixture_database(self.db_path) as index:
                 index.execute("UPDATE tasks SET meta_json=? WHERE task_id=?", (json.dumps(metadata), session_id))
-            with sqlite3.connect(self.cli_db_path) as cli:
+            with fixture_database(self.cli_db_path) as cli:
                 cli.execute("UPDATE session_entry SET data=? WHERE session_id=?", (json.dumps({"mode": "yolo", "planEnabled": False}), session_id))
             before = self.query("SELECT * FROM tasks")
             with self.subTest(marker=marker), self.assertRaisesRegex(DesktopIndexError, "不能确认"):
