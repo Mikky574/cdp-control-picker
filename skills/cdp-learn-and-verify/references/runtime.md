@@ -40,6 +40,10 @@
 | `inspect` | 实际核对当前页和所有已标注控件 | 无 |
 | `read-page` | 读取有限、必要的当前页面文本 | 无；不读取输入值、脚本或凭证 |
 | `act` | 对一个已标注控件执行一个动作 | `captureId`、`action`、`purposeScope`；需要参数的动作另传 `value` |
+| `observe-network` | 限时监听顶层浏览器页的同源 XHR/fetch 元数据 | `durationMs` 可选，`readyPath` 可选 |
+| `query-json` | 在当前页面会话发送一次已验证的同源 GET，返回指定 JSON 字段 | `purposeScope` 为 `read-only`，提供 `request` |
+
+两个网络操作需要新包的 `runtime.networkOperations` 声明。见 [网络观察与一次查询](learn-network.md)。
 
 首次调用可不写 `expectedUrlHash`，运行器用包内初始 URL 指纹校验。后续请求使用上次工具结果中的 `page.urlSha256` 作为 `expectedUrlHash`。这允许在观察结果后继续，但不允许在路由变化后盲用旧页面身份。
 

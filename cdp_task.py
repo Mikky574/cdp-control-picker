@@ -8,12 +8,14 @@ from pathlib import Path
 import re
 
 from cdp_client import CDPClient, validate_endpoint
+from cdp_network import NetworkJobError, observe_network, prepare_query, query_expression
 from workspace import atomic_write, page_identity, safe_url, sanitize_text
 
 
 SCRIPT = Path(__file__).with_suffix('.js')
 _HASH = re.compile(r'[a-f0-9]{64}\Z')
 _ACTIONS = {'read', 'click', 'fill', 'select', 'check'}
+_OPERATIONS = {'inspect', 'read-page', 'act', 'observe-network', 'query-json'}
 
 
 class TaskBlocked(ValueError):
@@ -140,8 +142,8 @@ def run_task(input_path, output_path, client_factory=CDPClient):
         if destination in {source, bundle_path} or destination.suffix.lower() != '.json':
             destination = None
             raise TaskBlocked('invalid-output-path', '结果需要独立 JSON 文件，不能覆盖任务或来源。')
-        if type(job.get('schemaVersion')) is not int or job['schemaVersion'] != 1 or operation not in {'inspect', 'read-page', 'act'}:
-            raise TaskBlocked('unsupported-job', '只支持 schemaVersion=1 的 inspect、read-page 或 act 任务。')
+        if type(job.get('schemaVersion')) is not int or job['schemaVersion'] != 1 or operation not in _OPERATIONS:
+            raise TaskBlocked('unsupported-job', '只支持 schemaVersion=1 及运行协议中列出的任务。')
         bundle = _read_object(bundle_path, 8 * 1024 * 1024)
         intent = bundle.get('taskIntent') or {}
         if (bundle.get('kind') != 'annotated-controls-page-bundle' or not isinstance(intent, dict)
@@ -175,6 +177,22 @@ def run_task(input_path, output_path, client_factory=CDPClient):
             raise TaskBlocked('missing-target', '缺少当前选中的页签 ID，请回采集器重新选页。')
         if not isinstance(expected_hash, str) or not _HASH.fullmatch(expected_hash):
             raise TaskBlocked('missing-url-fingerprint', '缺少有效的当前路由指纹，不能猜测页面。')
+        ready_path = None
+        if operation in {'observe-network', 'query-json'} and not expected_page['origin'].startswith(('http://', 'https://')):
+            raise TaskBlocked('network-page-required', '接口观察和查询需要选中 HTTP(S) 页面。')
+        if operation == 'observe-network':
+            duration_ms = job.get('durationMs', 8000)
+            if type(duration_ms) is not int or not 250 <= duration_ms <= 20000:
+                raise TaskBlocked('invalid-observation-window', '网络观察时长应为 250 至 20000 毫秒。')
+            if 'readyPath' in job:
+                ready_value = job['readyPath']
+                if not isinstance(ready_value, str) or not Path(ready_value).is_absolute():
+                    raise TaskBlocked('invalid-ready-path', '监听就绪文件需要独立绝对路径。')
+                ready_path = _inside(ready_value, learning)
+                if ready_path in {destination, source} or ready_path.suffix.lower() != '.json' or ready_path.exists():
+                    raise TaskBlocked('invalid-ready-path', '监听就绪文件需要不存在的独立 JSON 文件。')
+        if operation == 'query-json':
+            query = prepare_query(job)
         selected_capture = None
         if operation == 'act':
             if job.get('purposeScope') not in {'read-only', 'reversible'}:
@@ -212,18 +230,32 @@ def run_task(input_path, output_path, client_factory=CDPClient):
         result['page'] = {**actual_page, 'title': _clean(live.get('title', '')), 'urlSha256': actual_hash}
         if actual_page != expected_page or actual_hash != expected_hash:
             raise TaskBlocked('page-changed', '当前地址或页面路由已经变化；未操作控件，请重新核对页面。')
-        parameters = {'operation': operation, 'expectedLiveUrl': live_url,
-                      'captures': captures, 'captureId': job.get('captureId'),
-                      'action': job.get('action'), 'value': job.get('value')}
-        if action_policy is not None:
-            parameters['actionPolicy'] = action_policy
-        script = SCRIPT.read_text(encoding='utf-8')
-        expression = '(' + script + ')(' + json.dumps(parameters, ensure_ascii=True) + ')'
-        # Once an action call is submitted, an exception is an uncertain result.
-        if execution:
-            _save_execution(execution, 'executing', True)
-        result['actionAttempted'] = operation == 'act'
-        observed = _eval(client, expression)
+        if operation == 'observe-network':
+            def mark_ready():
+                if ready_path is not None:
+                    ready_path.parent.mkdir(parents=True, exist_ok=True)
+                    with ready_path.open('x', encoding='utf-8') as stream:
+                        json.dump({'status': 'listening', 'windowMs': duration_ms}, stream)
+            observed = observe_network(client, live_url, duration_ms, mark_ready)
+            after_observation = _eval(client, '(() => ({url: location.href}))()')
+            if after_observation.get('url') != live_url:
+                raise TaskBlocked('page-changed', '监听期间起始页已变化，本次不登记接口证据。')
+        elif operation == 'query-json':
+            observed = _eval(client, query_expression(query, live_url))
+            result['businessSuccessVerified'] = False
+        else:
+            parameters = {'operation': operation, 'expectedLiveUrl': live_url,
+                          'captures': captures, 'captureId': job.get('captureId'),
+                          'action': job.get('action'), 'value': job.get('value')}
+            if action_policy is not None:
+                parameters['actionPolicy'] = action_policy
+            script = SCRIPT.read_text(encoding='utf-8')
+            expression = '(' + script + ')(' + json.dumps(parameters, ensure_ascii=True) + ')'
+            # Once an action call is submitted, an exception is an uncertain result.
+            if execution:
+                _save_execution(execution, 'executing', True)
+            result['actionAttempted'] = operation == 'act'
+            observed = _eval(client, expression)
         if observed.get('status') not in {'completed', 'blocked', 'failed'}:
             raise TaskBlocked('invalid-page-result', '页面操作没有返回可确认的结果。')
         after = observed.pop('_pageLocation', None)
@@ -232,6 +264,11 @@ def run_task(input_path, output_path, client_factory=CDPClient):
             actual_hash = hashlib.sha256(after['url'].encode('utf-8')).hexdigest()
             live['title'] = after.get('title', live.get('title', ''))
         result.update(_clean(observed))
+        if operation == 'query-json' and observed['status'] == 'completed':
+            projected = observed.get('evidence', {}).get('fields', {})
+            if not isinstance(projected, dict) or projected.keys() != query['fields'].keys():
+                raise TaskBlocked('invalid-query-result', '接口投影与请求字段不一致。')
+            result['evidence']['fields'] = {key: _clean(value) for key, value in projected.items()}
         result['operation'] = operation
         result['schemaVersion'] = 1
         result['page'] = {**actual_page, 'title': _clean(live.get('title', '')), 'urlSha256': actual_hash}
@@ -239,6 +276,8 @@ def run_task(input_path, output_path, client_factory=CDPClient):
             result['businessSuccessVerified'] = False
     except TaskBlocked as error:
         result.update(status='unknown' if result['actionAttempted'] else 'blocked', error={'code': error.code, 'message': error.message})
+    except NetworkJobError as error:
+        result.update(status='blocked', error={'code': error.code, 'message': str(error)})
     except Exception as error:
         result.update(status='unknown' if result['actionAttempted'] else 'failed', error={'code': 'runtime-failure',
                       'message': 'CDP 连接或执行中断，未自动重试。', 'type': type(error).__name__})

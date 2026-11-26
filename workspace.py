@@ -636,7 +636,8 @@ class Workspace:
             bundle.update(taskIntent={'mode': 'learn-and-verify', 'contractVersion': 1,
                                       'actionPolicy': 'infer-from-purpose'},
                           connection=learning_connection,
-                          runtime={'command': list(runtime_command), 'requestFlag': '--cdp-task', 'outputFlag': '--output'},
+                          runtime={'command': list(runtime_command), 'requestFlag': '--cdp-task', 'outputFlag': '--output',
+                                   'networkOperations': ['observe-network', 'query-json']},
                           learning={'directory': 'learning', 'skillRef': relative(learning_skill)})
         task = (f"读取 [page-bundle.json](page-bundle.json) 并遵循 [项目页面技能]({skill_ref})，"
                 f"把本页全部 {len(captures)} 个已标注控件整理成统一页面 skill、contract 和候选 runner，"
@@ -672,6 +673,11 @@ class Workspace:
                        '缺少样本时先读取现有可用资料，或在隔离环境构造测试数据与预期结果。遇到可恢复失败先定位原因、修复并复测。'
                        '可能改变真实业务状态的步骤切到沙箱、预览或本地虚构页面测试；原页面继续做定位与只读核对。'
                        '分别记录实际页面与隔离测试结果，说明仍无法自行解决的具体条件。\n\n'
+                       '标注顺序用来理解流程的输入、业务对象与完成信号，不作为以后必须重放的脚本。'
+                       '优先找官方或项目接口定义；需要验证时，在一次代表性的网页操作前启动 observe-network，'
+                       '关联同源请求与页面结果，排除预取、埋点和旁支。对已证实可用的只读查询用 query-json 在原 Chrome 会话中做一次最小对照，'
+                       '记录接口契约与结果字段。后续遇到同类任务，优先复用经过验证的一次查询，'
+                       '需要分步或不支持时才用最短页面流程。业务编号和会话凭据分开，凭据留在浏览器。\n\n'
                        '每次只执行一个动作，用真实回读结果判断成功；超时或结果未知不要自动重发动作。不要把点击已发出当作业务完成。'
                        '保留原 capture 和页面包的未验证状态，把实际观察写入独立的 learning/learning-report.json，'
                        '分别说明连接、定位、流程的 verified/inferred/blocked 状态及对应工具结果文件。\n\n'

@@ -1,0 +1,7 @@
+CDP 控件采集器 v0.3.1-rc.5（Windows x64，App 0.3.1）
+
+完整解压后打开 Deployment-Guide.html。
+带 Chrome 离线安装器的整包，在缺少 Chrome 时双击 optional-dependencies/GoogleChromeStandaloneEnterprise64.msi，核对发布者 Google LLC，按 Windows 向导安装。GitHub 便携包也可以用 Prepare-Chrome.cmd 准备桌面 Chrome。
+点「启动 Chrome」，在专用窗口登录，刷新并选页后开启采集。
+交给 ZCode 学习时，AI 核对控件、输入、业务编号、请求和真实结果。验证同源只读接口后优先复用一次查询，必要时使用最短的页面流程。
+技能 ZIP 单独提供，给部署 AI 读取 cdp-picker-deploy/SKILL.md，给学习任务读取 cdp-learn-and-verify/SKILL.md。

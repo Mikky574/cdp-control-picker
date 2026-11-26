@@ -9,6 +9,7 @@ CDP 是 Chrome 的本机调试入口。ZCode 连接桥与 Chrome 需要分别验
 | 已有可达的 Chrome CDP | 把实际本机入口填入采集器的「设置 → 学习工作区 → CDP 地址」。点「启动 Chrome」复用窗口，或直接「刷新」。确认登录账号和目标网页。 |
 | 没有 CDP，但装了 Google Chrome | 保留默认可用端口，Chrome 路径留空，点「启动 Chrome」。也可显式选择 Chrome 的实际 `chrome.exe`；点保存后再次启动。安装普通 Chrome 可用 [Google 官方下载页](https://www.google.com/chrome/)。 |
 | Windows x64 没有 Chrome | 完整解压便携包，在与 EXE 同级的目录双击 `Prepare-Chrome.cmd`。它从 [Google 的 Stable 目录](https://googlechromelabs.github.io/chrome-for-testing/)下载和校验完整的 `chrome-win64.zip`，解压到 `optional-dependencies/chrome-win64/`。结果显示 `ready` 或 `already-ready` 后，回采集器点「启动 Chrome」。 |
+| 已拿到带离线安装器的 Windows x64 整包 | 完整解压。若系统没装 Chrome，打开 `optional-dependencies/GoogleChromeStandaloneEnterprise64.msi`，核对 Windows 显示发布者为 Google LLC，按 Windows 安装向导处理。安装好回采集器点「启动 Chrome」。该机器能从官方 MSI 离线安装，无需运行准备脚本。 |
 | 目标机不能下载 | 在能联网的 Windows x64 电脑完成上一行，再把便携程序和整个 `optional-dependencies/chrome-win64/` 一起带到目标机。也可下载 [Google 官方桌面 Chrome ZIP](https://googlechromelabs.github.io/chrome-for-testing/)，按目录结构完整解压。保留 DLL、资源及语言文件。 |
 | 9222 被别的服务占用 | 保存该服务的运行状态，将采集器改用空闲本机端口，例如 `http://127.0.0.1:9223`，点「保存并完成」再启动。独立设置的端口下次打开仍会使用。 |
 

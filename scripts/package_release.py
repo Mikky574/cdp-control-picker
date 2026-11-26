@@ -94,7 +94,7 @@ def package(version, executable, build_info, output, release_version=None):
                  '.handoffs', '.capture-kit', '.desktop-bridge', 'CDP-Chrome-Profile', 'CDP-Picker-Workspace', '_build', 'dist'}
     for name in names:
         path = Path(name)
-        if forbidden.intersection(path.parts) or path.suffix.lower() in {'.exe', '.pyc', '.log', '.zip', '.key', '.pem', '.har', '.sqlite', '.sqlite3', '.db'}:
+        if forbidden.intersection(path.parts) or path.suffix.lower() in {'.exe', '.msi', '.pyc', '.log', '.zip', '.key', '.pem', '.har', '.sqlite', '.sqlite3', '.db'}:
             raise RuntimeError('Unexpected runtime/build file tracked in release source: ' + name)
         sources[name] = git('show', 'HEAD:' + name)
     app = ast.parse(sources['app.py'].decode('utf-8-sig'))

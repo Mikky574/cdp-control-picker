@@ -2,7 +2,7 @@
 
 在自己已登录的Chrome里标注控件用途，交给ZCode学习怎样使用。控件每项一行，详情点“编辑”；发送状态持续保留。
 
-**本轮按 v0.3.1-rc.4 候选预发布交付，App 内版本为 0.3.1。** 学习任务由 AI 自行准备样本、执行、回读并复测。新电脑没有 Chrome 时，可使用便携包的 Prepare-Chrome.cmd。见 [RC 说明](docs/releases/v0.3.1-rc.4.md)。
+**本轮按 v0.3.1-rc.5 候选预发布交付，App 内版本为 0.3.1。** 学习任务验证页面动作的实际请求。证实只读接口可用后，同类任务可以复用一次同源查询。见 [RC 说明](docs/releases/v0.3.1-rc.5.md)。
 
 源码：[Mikky574/cdp-control-picker](https://github.com/Mikky574/cdp-control-picker)。[0.3.0稳定版Latest](https://github.com/Mikky574/cdp-control-picker/releases/tag/v0.3.0)保留；RC与当前App能力见单独说明，不混用验收结果。
 

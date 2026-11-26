@@ -1549,6 +1549,7 @@ def main():
         import websocket
         report = {'version': VERSION, 'uiMode': 'floating', 'controlPresentation': 'rows', 'fontAwareLayout': True, 'minimumCollapsedWindowSize': [280, 210], 'originalToolbarLayout': True, 'persistentSendFeedback': True, 'contentSendGuard': True, 'chromeWindowActivation': True, 'controlManagement': ['view', 'edit', 'soft-delete', 'reorder', 'declare-sequence'], 'automaticModelCalls': False, 'handoffBackend': 'zcode-native-extension-host', 'requestedPermissionMode': 'yolo', 'permissionScope': 'native-session-request', 'nativePermissionVerified': False, 'zcodeRunnerImported': 'zcode_runner' in sys.modules, 'pickerScriptExists': SCRIPT.is_file(), 'bundledSkillExists': (skill_source() / 'SKILL.md').is_file(), 'iconExists': ICON.is_file(), 'tkVersion': tk.TkVersion, 'websocketVersion': websocket.__version__, 'openedWindow': False, 'connectedBrowser': False}
         report.update(defaultHandoffIntent='learn-and-verify',actionPolicy='infer-from-purpose',manualActionSelection=False,headlessCdpTask=True,
+                      networkOperations=['observe-network','query-json'],
                       backendSelection='path-cli-first',backendDiagnostic=True,
                       backendSelectionScope='cli-diagnostic-only',
                       nativeBridgeBundled=all((RESOURCE_DIR/'zcode-extension'/name).is_file() for name in ('.claude-plugin/marketplace.json','cdp-picker-bridge/.zcode-plugin/plugin.json','cdp-picker-bridge/package.json','cdp-picker-bridge/extension.js')),

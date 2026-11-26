@@ -59,7 +59,8 @@ class WorkspaceLearningTests(unittest.TestCase):
                 self.assertNotIn('QUERY_SENTINEL', path.read_text(encoding='utf-8'))
                 self.assertNotIn('privateRecord=', path.read_text(encoding='utf-8'))
         self.assertEqual(payload['runtime'], {'command': self.runtime,
-                                             'requestFlag': '--cdp-task', 'outputFlag': '--output'})
+                                             'requestFlag': '--cdp-task', 'outputFlag': '--output',
+                                             'networkOperations': ['observe-network', 'query-json']})
 
     def test_learning_context_links_both_skills_and_real_output_directory(self):
         bundle = self.export()
@@ -85,6 +86,7 @@ class WorkspaceLearningTests(unittest.TestCase):
         self.assertIn('在隔离环境构造测试数据', context)
         self.assertIn('修复并复测', context)
         self.assertIn('分别记录实际页面与隔离测试结果', context)
+        self.assertIn('优先复用经过验证的一次查询', context)
         self.assertNotIn('需要具体的任务授权', context)
         self.assertIn('真实回读结果', context)
         self.assertNotIn('简短确认收到后等待', context)

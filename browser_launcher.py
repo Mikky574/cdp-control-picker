@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 DEFAULT_CDP_ENDPOINT = 'http://127.0.0.1:9222'
+OFFLINE_CHROME_INSTALLER = 'GoogleChromeStandaloneEnterprise64.msi'
 
 
 START_TIMEOUT_SECONDS = 15.0
@@ -152,6 +153,8 @@ def find_chrome(chrome_path=None):
     portable = optional_chrome_directory()
     if optional_chrome_ready(portable):
         return (portable / 'chrome.exe').resolve()
+    if (portable.parent / OFFLINE_CHROME_INSTALLER).is_file():
+        raise BrowserLaunchError("未找到已安装的 Chrome。请打开程序旁的 optional-dependencies 文件夹，双击 GoogleChromeStandaloneEnterprise64.msi 安装，然后回到这里点「启动 Chrome」。")
     raise BrowserLaunchError("未找到 Google Chrome。运行便携包中的 Prepare-Chrome.cmd，再点启动；也可以在设置里选择已有的 chrome.exe。")
 
 
