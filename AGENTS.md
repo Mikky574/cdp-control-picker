@@ -10,7 +10,7 @@
 - 端口未启动且系统无 Chrome 时，可从便携包显式准备 Google Stable 的桌面 Chrome for Testing。浏览器全目录与登录资料分开；源码和主 Release ZIP 只含准备入口。绑定本机、原端口占用时显式切换并保存。设置持久化可选的回环 `cdpEndpoint`，旧配置缺省 9222。
 - 采集范围是普通主 frame DOM。右键标注保存控件位置与人的用途；页面包只合并同一 origin/path 的已标注卡，不记录全页面事件。默认采集排列不代表流程；仅“按此顺序操作”启用时把sequence作为用户声明前后，executionValidated=false表示采集时尚未实测；声明顺序本身不是实际执行或成功证据，学习任务依当前意图/策略和真实页面证据推进。
 - 本页列表支持行内编辑说明及“⋯”菜单中的删除、上移/下移；移动即启用用户声明次序。编辑界面只提供annotation名称/说明/前置条件/预期结果等，不展示动作勾选；旧allowedActions字段可为兼容保留，人写名称不是AX名称；page/control及定位证据只读。删除只移入本地回收区，旧交接包和已发会话保留快照，不回写或销毁。资料/顺序改动必须随最新包发送并正确参与交接去重。
-- 0.3.1新包使用taskIntent.mode=learn-and-verify、actionPolicy=infer-from-purpose。人只说明控件用途、前置与预期，不预先勾选read/click/fill；ZCode结合用途与实际控件类型/状态推断动作，先inspect再逐步验证并留证据。旧allowedActions不是新策略的权限开关，也不能凭字段或按钮名字扩大业务范围。缺参数、作用不明或涉及业务提交/删除/付款时，依具体用户任务处理，不编造参数或成功；可继续不依赖缺项的检查。
+- 0.3.1新包使用taskIntent.mode=learn-and-verify、actionPolicy=infer-from-purpose。人说明用途、前置和预期，ZCode 结合实际控件推断动作，先 inspect，再自行准备样本、执行、回读、修复和复测。可能改变真实业务状态的步骤转到沙箱、预览或本地虚构页面。报告分别记真实页面与隔离测试结果。旧 allowedActions 仅保留兼容语义，已明确要求的真实业务操作仍按具体任务执行。
 - 旧包无taskIntent或context-only仍只接收资料；旧learn-and-verify包没有actionPolicy时仍按原allowedActions约定。新推断策略只作用于显式新包，不静默升级旧包；意图、策略和连接范围必须进入后台与UI去重身份，不能误命中旧确认回执。交接请求号仅留内部日志/协议 inputId，不拼进给人看的任务正文，不解释成网页DOM id、targetId或ZCode会话ID。
 - 发送给 ZCode 后，任务必须出现在用户指定的可见对话中并能继续。后台 CLI 的独立会话、命令结束或产物存在不能替代该验收；核实实际接入能力，不虚构产品命令或界面行为。
 - 技能以本仓库 `skills/` 中的文件交付，不自动安装进 Agent 用户目录或修改默认模型。工作区中可保存本项目的 durable 技能副本供任务引用。

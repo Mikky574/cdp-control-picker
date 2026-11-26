@@ -541,7 +541,8 @@ class ZCodeHandoff(_HandoffFiles):
             if intent == 'learn-and-verify':
                 prompt = (f'请学习并验证本页 {payload["captureCount"]} 个已标注控件。'
                           f'读取绝对路径“{context}”及其中指定的技能，连接已有Chrome，'
-                          '按用途与真实页面证据在授权范围内验证，输出真实结果和可复用能力；缺参数时说明具体缺项。')
+                          '按用途和页面证据自行准备样本、执行、读回和复测；可能改变真实业务状态的步骤用隔离数据测试。'
+                          '输出各环境的真实结果和可复用能力。')
             else:
                 prompt = (f'接收本页全部 {payload["captureCount"]} 个已标注控件的上下文。'
                           f'读取绝对路径“{context}”，简短确认收到后等待我补充。')
@@ -734,8 +735,8 @@ class ZCodeHandoff(_HandoffFiles):
             if intent == 'learn-and-verify':
                 prompt = (f'请学习并验证本页 {payload["captureCount"]} 个已标注控件。'
                           f'读取工作区内的“{context_ref}”及其中指定的技能，连接已有 Chrome，'
-                          '在约定允许的范围内完成控件定位和流程验证，输出真实验证结果和可复用能力；'
-                          '缺少参数时说明具体缺项。')
+                          '自行准备样本并核对控件和流程结果；可能改变真实业务状态的步骤用隔离数据测试。'
+                          '输出各环境的真实结果和可复用能力。')
             else:
                 prompt = (f'接收本页全部 {payload["captureCount"]} 个已标注控件的上下文。'
                           f'读取工作区内的“{context_ref}”，简短确认收到后等待我补充。')

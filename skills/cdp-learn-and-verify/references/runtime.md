@@ -53,14 +53,14 @@
   "expectedUrlHash": "上次工具结果中的完整指纹",
   "captureId": "cap-order-number",
   "action": "fill",
-  "value": "用户已经提供且允许用于本次查询的编号",
+  "value": "当前场景适用的查询样本编号",
   "purposeScope": "reversible"
 }
 ```
 
 `action` 支持 `read`、`click`、`fill`、`select`、`check`。包的actionPolicy为infer-from-purpose时，根据用途、当前任务及实时DOM类型选择动作，旧annotation.allowedActions不作门槛；旧包无策略时，动作仍必须包含在原allowedActions中。未知策略会在连接前阻断，不默认为新策略，也不通过修改旧包策略绕过原限制。
 
-`fill`、`select`的`value`是字符串；`check`的`value`是布尔值，明确要求勾选还是取消，不盲目切换；`read`、`click`不需要value。`purposeScope`仅可为`read-only`或`reversible`，用于说明本次动作已经判断的范围；这个字段本身不授予权限，不得为绕过限制把业务变更冒写成查询。缺少参数时报告具体缺项。两种策略都保留精确页签/路由、唯一定位、可见可用、敏感控件、实际DOM类型与参数校验。
+`fill`、`select`的`value`是字符串；`check`的`value`是布尔值；`read`、`click`不传 value。AI 自行判断并填写 `purposeScope` 为 `read-only` 或 `reversible`，普通测试不要求用户逐项填写。缺参时优先从当前任务或可见样本提取，或在测试环境构造数据。会改变真实业务状态的测试在沙箱、预览或本地虚构数据上完成。只在有依据时标记只读或可撤销。两种策略都保留精确页签/路由、唯一定位、可见可用、敏感控件、实际 DOM 类型与参数校验。
 
 新策略参与交接内容身份和动作job执行身份，旧策略回执不能证明新策略已执行。同一job路径改变策略会阻断，不能复用旧完成回执或绕过未知结果；应通过采集器导出新的任务包，并先核对原动作是否已经发生。
 
@@ -79,4 +79,4 @@
 
 动作结果未知时保留请求、结果与执行记录，先用允许的只读检查确认现状。pending或failed记录若可能已尝试动作，再次运行原job会返回unknown，不连接、不重试；不能因为换一个请求文件名就重复提交动作。duplicate回执仍是原次结果，不代表刚刚又执行成功。断开只关闭本次CDP连接，不关闭用户页签或浏览器。
 
-学习报告的每个 `verified` 项引用一个实际结果文件，并说明该文件中支持结论的证据。`inferred` 说明推断来源；`blocked` 说明阻断点与所需参数或授权。不要把运行器回执、ZCode 对话登记回执和业务完成混为一谈。
+学习报告的每个 `verified` 项引用实际结果文件，写明目标环境与支持结论的证据。`inferred` 说明推断来源；`blocked` 说明已尝试的解决方式及还缺的具体条件。隔离测试的结论只适用于隔离场景。

@@ -668,9 +668,10 @@ class Workspace:
                        '先执行 inspect，记录连接和每项控件的真实唯一性、可见性、可用性证据。'
                        'taskIntent.actionPolicy=infer-from-purpose 表示根据用途、实时 DOM 类型和当前任务判断动作；'
                        '旧 annotation.allowedActions 仅兼容保留，不是新包的动作门槛或当前授权，不要求用户预先选择动作。'
-                       '再结合可选前置条件和预期结果，以及 sequence.ordered 声明的顺序尝试可明确判断为只读或可撤销的流程。'
-                       '填写可能自动保存，click 也可能提交业务；涉及业务提交、删除、付款或动作性质不明时，需要具体的任务授权。'
-                       '缺真实参数时列出参数，不能编造生产业务值；示例值只用于明确的演示环境。\n\n'
+                       '结合前置条件、预期结果和 sequence.ordered 声明的顺序，自行完成可判断为只读或可撤销的测试。'
+                       '缺少样本时先读取现有可用资料，或在隔离环境构造测试数据与预期结果。遇到可恢复失败先定位原因、修复并复测。'
+                       '可能改变真实业务状态的步骤切到沙箱、预览或本地虚构页面测试；原页面继续做定位与只读核对。'
+                       '分别记录实际页面与隔离测试结果，说明仍无法自行解决的具体条件。\n\n'
                        '每次只执行一个动作，用真实回读结果判断成功；超时或结果未知不要自动重发动作。不要把点击已发出当作业务完成。'
                        '保留原 capture 和页面包的未验证状态，把实际观察写入独立的 learning/learning-report.json，'
                        '分别说明连接、定位、流程的 verified/inferred/blocked 状态及对应工具结果文件。\n\n'
@@ -688,5 +689,5 @@ class Workspace:
                 "directory": str(directory), "bundlePath": str(bundle_path), "taskPath": str(task_path),
                 "contextPath": str(context_path),
                 "generatedPath": str(generated), "sequence": sequence,
-                "shortTask": (f"读取“{context_path}”及其中指定技能，学习并实际验证本页 {len(captures)} 个控件的 CDP 能力，输出验证结果和可复用能力；缺参数说明具体缺项。"
+                "shortTask": (f"读取“{context_path}”及其中指定技能，学习并实际验证本页 {len(captures)} 个控件的 CDP 能力，自行准备样本、执行并读回结果，输出可复用能力。"
                               if learning_connection else f"读取“{context_path}”，确认收到本页 {len(captures)} 个控件上下文后等待我后续要求。")}

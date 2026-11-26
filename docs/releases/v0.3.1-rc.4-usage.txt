@@ -1,0 +1,7 @@
+CDP 控件采集器 v0.3.1-rc.4（Windows x64，App 0.3.1）
+
+完整解压后打开 Deployment-Guide.html 查首次配置。
+没装 Chrome 时，运行同级的 Prepare-Chrome.cmd 准备完整桌面 Chrome。回到采集器启动 Chrome，在专用窗口登录后刷新、选页并开启采集。
+点「交给 ZCode 学习」后，AI 自己准备样本、执行并读回结果、修复可恢复问题再复测。可能改动线上记录的步骤在隔离环境测试，任何通过结论都注明实际环境。
+启动新版 EXE 后，新导出的交接说明和资料目录里的配套学习 Skill 会采用新版规则。
+技能 ZIP 单独提供，给部署 AI 读取 cdp-picker-deploy/SKILL.md，给学习任务读取 cdp-learn-and-verify/SKILL.md。
