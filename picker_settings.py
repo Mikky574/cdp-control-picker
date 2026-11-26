@@ -9,6 +9,7 @@ from pathlib import Path
 import uuid
 
 from workspace import atomic_write
+from browser_launcher import BrowserLaunchError, normalize_cdp_endpoint
 
 
 class SettingsError(ValueError):
@@ -61,7 +62,7 @@ def validate_model(selection):
 
 
 def clean_settings(value):
-    allowed = {'schemaVersion', 'workspaceDir', 'zcodeCli', 'chromeExe', 'desktopBridgeFile', 'modelSelection'}
+    allowed = {'schemaVersion', 'workspaceDir', 'zcodeCli', 'chromeExe', 'cdpEndpoint', 'desktopBridgeFile', 'modelSelection'}
     if not isinstance(value, dict) or set(value) - allowed or type(value.get('schemaVersion')) is not int or value['schemaVersion'] != 1:
         raise SettingsError('本机配置格式无效；不会覆盖未知配置，请在设置中另行确认。')
     result = {'schemaVersion': 1}
@@ -76,6 +77,11 @@ def clean_settings(value):
             raise SettingsError('学习工作区必须是明确的绝对目录，不能使用磁盘根。')
     if result['desktopBridgeFile'] and not Path(result['desktopBridgeFile']).expanduser().is_absolute():
         raise SettingsError('桌面连接文件需要绝对路径，避免迁移后选错实例。')
+    if 'cdpEndpoint' in value:
+        try:
+            result['cdpEndpoint'] = normalize_cdp_endpoint(value['cdpEndpoint'])
+        except BrowserLaunchError as error:
+            raise SettingsError(str(error)) from None
     result['modelSelection'] = validate_model(value.get('modelSelection'))
     return result
 

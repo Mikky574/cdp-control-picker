@@ -1,0 +1,11 @@
+CDP 控件采集器 v0.3.1-rc.3（Windows x64，App 0.3.1）
+
+1. 完整解压 ZIP。人用图解打开 Deployment-Guide.html。
+2. 已有可用的本机 Chrome CDP 时，设置里填写实际地址并点「启动 Chrome」或「刷新」。没有 CDP 时同一个启动按钮会打开专用窗口。
+3. 如果没装 Google Chrome，双击 Prepare-Chrome.cmd 从 Google 准备完整桌面 Chrome。看到 ready 或 already-ready 后回采集器点「启动 Chrome」。
+4. 新打开的专用窗口需要首次手动登录网站。今后复用程序同级的 CDP-Chrome-Profile。
+5. 9222 被占用时，在「设置 → 学习工作区」填空闲本机地址，例如 http://127.0.0.1:9223，再点「保存并完成」和「启动 Chrome」。
+6. 离线机器可以提前准备，在迁移时把程序和整个 optional-dependencies/chrome-win64 目录一起带走。登录资料与程序分别管理。
+7. ZCode 首次接入时安装连接桥，在 ZCode 重新加载扩展一次，然后连接并授权。已有授权可直接发送。
+
+AI 部署说明在独立 -skills.zip 的 cdp-picker-deploy/SKILL.md，浏览器和 CDP 部分在 references/chrome-cdp.md。

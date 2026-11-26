@@ -62,6 +62,23 @@ def delivery_guide(data, version):
     return re.sub(r'''(href\s*=\s*["'])([^"']+)(["'])''', link, data.decode('utf-8')).encode('utf-8')
 
 
+def chrome_setup_command(executable):
+    lines = [
+        '@echo off',
+        'setlocal',
+        'chcp 65001 >nul',
+        'echo Preparing optional Windows x64 Chrome for Testing from Google.',
+        'echo A complete browser download may take a few minutes.',
+        f'start "" /wait "%~dp0{executable}" --prepare-chrome "%~dp0Chrome-Setup-Result.json"',
+        'set "PICKER_CHROME_EXIT=%ERRORLEVEL%"',
+        'if exist "%~dp0Chrome-Setup-Result.json" type "%~dp0Chrome-Setup-Result.json"',
+        'if not "%PICKER_CHROME_EXIT%"=="0" echo Chrome preparation did not finish. Check the result above.',
+        'pause',
+        'exit /b %PICKER_CHROME_EXIT%',
+    ]
+    return ('\r\n'.join(lines) + '\r\n').encode('ascii')
+
+
 def package(version, executable, build_info, output, release_version=None):
     if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?', version):
         raise ValueError('Use a semantic version such as 0.2.0.')
@@ -115,6 +132,7 @@ def package(version, executable, build_info, output, release_version=None):
     (output / 'BUILD-INFO.json').write_bytes(metadata_bytes)
     (output / 'USAGE-zh-CN.txt').write_bytes(usage)
     inner = {target.name: binary, 'USAGE-zh-CN.txt': usage, 'BUILD-INFO.json': metadata_bytes}
+    inner['Prepare-Chrome.cmd'] = chrome_setup_command(target.name)
     bridge_files = {'ZCode-Bridge/' + name.removeprefix('zcode-extension/'): data
                     for name, data in sources.items() if name.startswith('zcode-extension/')}
     inner.update(bridge_files)

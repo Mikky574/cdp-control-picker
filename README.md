@@ -2,7 +2,7 @@
 
 在自己已登录的Chrome里标注控件用途，交给ZCode学习怎样使用。控件每项一行，详情点“编辑”；发送状态持续保留。
 
-**本轮按 v0.3.1-rc.2 候选预发布交付，App 内版本为 0.3.1。** 新采集的控件卡只记录用途、预期和定位信息。原生会话已在本机 ZCode 4.0.0 实测，模型处理中即可看到首条消息；3.18.2 的目标机仍待验收。见 [RC 说明](docs/releases/v0.3.1-rc.2.md)。
+**本轮按 v0.3.1-rc.3 候选预发布交付，App 内版本为 0.3.1。** 新电脑没有 Chrome 时，使用便携包的 Prepare-Chrome.cmd 准备完整桌面 Chrome。原生会话此前已在本机 ZCode 4.0.0 验证，3.18.2 的目标机仍待验收。见 [RC 说明](docs/releases/v0.3.1-rc.3.md)。
 
 源码：[Mikky574/cdp-control-picker](https://github.com/Mikky574/cdp-control-picker)。[0.3.0稳定版Latest](https://github.com/Mikky574/cdp-control-picker/releases/tag/v0.3.0)保留；RC与当前App能力见单独说明，不混用验收结果。
 
@@ -14,6 +14,8 @@
 4. 设置“ZCode 桌面与模型”中点“刷新模型”，选择服务商/本会话模型，或保留“跟随后端当前模型”；最后“保存并完成”。只保存路径与选择，不保存Key/token、不改全局模型。
 5. 启动专用Chrome、登录、刷新选页并开启采集；网页右键保存控件名称、用途和预期结果。
 6. 每行“编辑”看详情，“⋯”删除/排序。需要先后时勾选“按此顺序操作”，再交给ZCode学习；无需勾选允许动作。
+
+缺少浏览器或 CDP 时，见 [Chrome 与 CDP 部署说明](skills/cdp-picker-deploy/references/chrome-cdp.md)。已有可用端点直接复用，没端点可点「启动 Chrome」为专用窗口建立端点。9222 被其他程序占用时，可改用并保存 9223 等空闲本机端口。
 
 细致说明：[人用部署图解](docs/deployment.html)。给AI部署：[部署技能](skills/cdp-picker-deploy/SKILL.md)。原生桥能力不足时明确提示，不自动升级桌面、不静默改走CLI或写索引。
 

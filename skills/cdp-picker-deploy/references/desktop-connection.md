@@ -65,7 +65,7 @@ AI核查安装时使用同一安全解析CLI argv、同一资料cwd，等价顺�
 
 ## 本机持久配置与优先级
 
-配置位于`%LOCALAPPDATA%/CDP-Control-Picker/settings.json`，schemaVersion=1，只接受workspaceDir、zcodeCli、chromeExe、desktopBridgeFile路径与modelSelection（null或providerId/modelId）；不保存Key、桥token或provider正文，desktopBridgeFile只是发现文件路径。坏配置保留不自动覆盖，需用户在设置显式“保存并完成”确认重建。
+配置位于`%LOCALAPPDATA%/CDP-Control-Picker/settings.json`，schemaVersion=1，存放 workspaceDir、zcodeCli、chromeExe、desktopBridgeFile 路径、本机 cdpEndpoint 和 modelSelection（null 或 providerId/modelId）。旧配置缺少 CDP 地址时默认使用本机 9222。desktopBridgeFile 只是发现文件路径，配置不存 Key、桥 token 或 provider 正文。坏配置需用户在设置显式“保存并完成”确认重建。
 
 资料目录优先级：当前启动显式`--workspace` > 已保存workspaceDir > 已存在旧目录（冻结EXE旁或源码.local下CDP-Picker-Workspace）> Windows KnownFolder Documents/CDP-Picker-Learning。GUI首次新默认会创建目录并保存非秘密选择；设置可创建新资料目录，但不搬旧数据。点击“使用 ZCode 学习空间”只切到health给出的现有目录，不移动旧资料或Chrome profile。
 

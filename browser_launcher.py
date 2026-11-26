@@ -15,10 +15,13 @@ from pathlib import Path
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+
+DEFAULT_CDP_ENDPOINT = 'http://127.0.0.1:9222'
 
 
 START_TIMEOUT_SECONDS = 15.0
@@ -48,6 +51,10 @@ def _parse_endpoint(endpoint):
         raise BrowserLaunchError("请填写本机 HTTP CDP 入口，例如 http://127.0.0.1:9222；不接受远程地址、凭据或额外路径。") from None
     authority = "[" + host + "]" if ":" in host else host
     return host, port, "http://" + authority + ":" + str(port)
+
+
+def normalize_cdp_endpoint(endpoint):
+    return _parse_endpoint(endpoint)[2]
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -110,12 +117,23 @@ def _registry_candidates():
     return candidates
 
 
+def optional_chrome_directory(install_dir=None):
+    if install_dir is None:
+        install_dir = Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else Path(__file__).resolve().parent
+    return Path(install_dir) / 'optional-dependencies' / 'chrome-win64'
+
+
+def optional_chrome_ready(directory):
+    directory = Path(directory)
+    return all((directory / name).is_file() for name in ('chrome.exe', 'chrome.dll', 'icudtl.dat', 'resources.pak'))
+
+
 def find_chrome(chrome_path=None):
-    """Discover actual chrome.exe paths, never Edge and never a download."""
+    """Discover a system or optional portable Chrome without downloading."""
     if chrome_path is not None and str(chrome_path).strip():
         candidate = Path(os.path.expandvars(str(chrome_path))).expanduser().resolve()
         if candidate.name.lower() not in {"chrome.exe", "chrome", "google-chrome", "google-chrome-stable"} or not candidate.is_file():
-            raise BrowserLaunchError("所选文件不是可用的 Google Chrome 程序，请选择实际的 chrome.exe。")
+            raise BrowserLaunchError("设置里的 Chrome 路径不可用。请选择新电脑上的 chrome.exe，或清空旧路径后使用自动查找。")
         return candidate
     candidates = []
     for name in ("chrome.exe", "chrome", "google-chrome", "google-chrome-stable"):
@@ -131,7 +149,10 @@ def find_chrome(chrome_path=None):
         candidate = Path(os.path.expandvars(value)).expanduser().resolve()
         if candidate.name.lower() in {"chrome.exe", "chrome", "google-chrome", "google-chrome-stable"} and candidate.is_file():
             return candidate
-    raise BrowserLaunchError("未找到 Google Chrome。请先安装 Chrome，或在面板中选择已有的 chrome.exe；工具不会下载或改用 Edge。")
+    portable = optional_chrome_directory()
+    if optional_chrome_ready(portable):
+        return (portable / 'chrome.exe').resolve()
+    raise BrowserLaunchError("未找到 Google Chrome。运行便携包中的 Prepare-Chrome.cmd，再点启动；也可以在设置里选择已有的 chrome.exe。")
 
 
 def _profile_path(profile_dir):

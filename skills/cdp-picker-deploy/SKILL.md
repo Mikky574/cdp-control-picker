@@ -1,6 +1,6 @@
 ---
 name: cdp-picker-deploy
-description: 部署或迁移Windows控件采集器，接入ZCode原生桌面学习扩展，区分资料目录与学习项目、会话模型及权限，并按需诊断独立CLI。用于安装和连接，不代替页面控件学习。
+description: 部署或迁移 Windows 控件采集器，准备专用 Chrome 和本机 CDP，接入 ZCode 原生桌面扩展，核对资料目录、模型、授权与独立 CLI。用于安装和连接。
 ---
 
 # 部署与环境对齐
@@ -11,6 +11,7 @@ description: 部署或迁移Windows控件采集器，接入ZCode原生桌面学�
 
 - 原生桌面首次接入、固定学习项目、资料目录、对话位置与模型：先读 [desktop-connection.md](references/desktop-connection.md)。默认由扩展通过App owner创建/打开/等待原生会话；首次原生权限由用户批准，不能绕过。不直写索引，也不让CLI兼容诊断冒充桌面接入。
 - 下载安装或CLI源码构建：读 [install.md](references/install.md)。官方资料核查日期为 **2026-11-26**；版本与入口可能变化，实际安装前重新核查。
+- 没有 Chrome、没有 9222、迁移后端口或程序位置变化：读 [chrome-cdp.md](references/chrome-cdp.md)。先核对现有端点，再选择系统 Chrome 或便携包的完整桌面 Chrome for Testing。
 - 盘点 EXE、CLI、Node、数据与工作区：读 [environment.md](references/environment.md)，填写 [部署记录模板](references/deployment-record.example.json)。模板不是主程序自动配置。
 - 更换安装位置或 CLI：读 [relocate.md](references/relocate.md)。保留原会话库与工作区身份；不要靠复制数据库、重建会话或修改索引绕过不兼容。
 - 检测、失败定位与验收：读 [verification.md](references/verification.md)。版本、stdio、模型、桌面索引、GUI 与 Chrome 分别记录，不能相互替代。

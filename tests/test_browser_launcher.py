@@ -139,6 +139,22 @@ class LauncherTests(unittest.TestCase):
         with self.assertRaises(launcher.BrowserLaunchError):
             launcher.find_chrome(edge)
 
+    def test_portable_is_fallback_after_system_chrome_and_requires_complete_files(self):
+        portable = self.base / 'optional-dependencies' / 'chrome-win64'
+        portable.mkdir(parents=True)
+        (portable / 'chrome.exe').touch()
+        with patch.object(launcher, 'optional_chrome_directory', return_value=portable), \
+                patch.object(launcher.shutil, 'which', return_value=None), \
+                patch.object(launcher, '_registry_candidates', return_value=[]), \
+                patch.dict(launcher.os.environ, {}, clear=True):
+            with self.assertRaisesRegex(launcher.BrowserLaunchError, 'Prepare-Chrome'):
+                launcher.find_chrome()
+            for filename in ('chrome.dll', 'icudtl.dat', 'resources.pak'):
+                (portable / filename).touch()
+            self.assertEqual(launcher.find_chrome(), portable / 'chrome.exe')
+            with patch.object(launcher, '_registry_candidates', return_value=[str(self.chrome)]):
+                self.assertEqual(launcher.find_chrome(), self.chrome.resolve())
+
     def test_registry_candidate_is_supported_without_executing_it(self):
         with patch.object(launcher.shutil, "which", return_value=None), patch.object(launcher, "_registry_candidates", return_value=[str(self.chrome)]):
             self.assertEqual(launcher.find_chrome(), self.chrome.resolve())

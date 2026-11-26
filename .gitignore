@@ -21,6 +21,8 @@
 /build/
 /dist/
 /outputs/
+/optional-dependencies/chrome-win64/
+/optional-dependencies/.picker-chrome-*/
 __pycache__/
 *.py[cod]
 *.log

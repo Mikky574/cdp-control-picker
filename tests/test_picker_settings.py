@@ -48,6 +48,12 @@ class PickerSettingsTests(unittest.TestCase):
         with patch.dict(os.environ,{'LOCALAPPDATA':str(self.base)}):
             self.assertEqual(default_settings_path(),self.base/'CDP-Control-Picker'/'settings.json')
 
+    def test_alternate_loopback_cdp_address_survives_reload(self):
+        self.store.save({**self.settings(), 'cdpEndpoint': 'http://localhost:9223/'})
+        self.assertEqual(self.store.load()['cdpEndpoint'], 'http://127.0.0.1:9223')
+        with self.assertRaises(SettingsError):
+            self.store.save({**self.settings(), 'cdpEndpoint': 'http://example.test:9223'})
+
     def test_unknown_keys_secrets_and_invalid_models_never_replace_existing_config(self):
         self.store.save(self.settings());before=self.store.path.read_bytes()
         invalid=[{**self.settings(),'apiKey':'must-not-persist'},

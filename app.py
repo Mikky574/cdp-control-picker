@@ -22,7 +22,7 @@ import uuid
 
 from cdp_client import CDPClient
 from workspace import Workspace, atomic_write, page_identity, safe_url, sanitize_text, _bundle_capture
-from browser_launcher import launch_or_reuse
+from browser_launcher import DEFAULT_CDP_ENDPOINT, launch_or_reuse, optional_chrome_directory
 from capture_list import CaptureList, _two_line_summary
 from send_feedback import SendFeedback
 from picker_settings import PickerSettings, SettingsError, clean_settings, recommended_workspace, validate_model
@@ -61,7 +61,7 @@ def identity(url):
 
 
 class PickerApp:
-    def __init__(self, root, workspace_path=None, endpoint='http://127.0.0.1:9222', *, settings_path=None):
+    def __init__(self, root, workspace_path=None, endpoint=None, *, settings_path=None):
         self.root=root
         self._settings_store=PickerSettings(settings_path)
         self._settings_warning=''
@@ -122,7 +122,7 @@ class PickerApp:
         self._layout_busy=set()
         self._send_timer_job=None
         self._send_progress_running=False
-        self.endpoint=tk.StringVar(value=endpoint)
+        self.endpoint=tk.StringVar(value=endpoint or saved.get('cdpEndpoint') or DEFAULT_CDP_ENDPOINT)
         self.workspace_path=tk.StringVar(value=str(selected_workspace))
         self.workspace_value=self.workspace_path.get()
         self.workspace_path.trace_add('write',lambda *_:setattr(self,'workspace_value',self.workspace_path.get()))
@@ -862,7 +862,7 @@ class PickerApp:
         ttk.Label(paths,text='Chrome 路径').grid(row=4,column=0,sticky='w',pady=(10,0))
         chrome=ttk.Entry(paths,textvariable=self.chrome_path);chrome.grid(row=4,column=1,sticky='ew',pady=(10,0))
         browse_chrome=ttk.Button(paths,text='选择',width=5,command=self.choose_chrome);browse_chrome.grid(row=4,column=2,padx=(7,0),pady=(10,0))
-        profile_hint=ttk.Label(paths,text='专用 Chrome 登录资料仍沿用原 profile。更换学习目录不会移动、复制登录资料，也不会重启当前浏览器。',foreground='#526780',wraplength=480,justify='left');profile_hint.grid(row=5,column=0,columnspan=3,sticky='ew',pady=(10,0))
+        profile_hint=ttk.Label(paths,text='Chrome 路径留空时自动查找已安装的 Chrome 和便携包的可选 Chrome。没有浏览器时运行 Prepare-Chrome.cmd。9222 被占用可填写 http://127.0.0.1:9223 并保存。专用 Chrome 会保留自己单独的登录资料。',foreground='#526780',wraplength=480,justify='left');profile_hint.grid(row=5,column=0,columnspan=3,sticky='ew',pady=(10,0))
         ttk.Label(backend,text='ZCode CLI').grid(row=0,column=0,sticky='w',padx=(0,10))
         zcode=ttk.Entry(backend,textvariable=self.zcode_path,width=42);zcode.grid(row=0,column=1,sticky='ew')
         browse_zcode=ttk.Button(backend,text='选择',width=5,command=self.choose_zcode);browse_zcode.grid(row=0,column=2,padx=(7,0))
@@ -911,6 +911,7 @@ class PickerApp:
             if getattr(self,'_model_provider_pending',None):raise SettingsError('请为所选服务商选择模型，或选择跟随后端。')
             value=clean_settings({'schemaVersion':1,'workspaceDir':self.workspace_value,
                 'zcodeCli':self.zcode_path.get(),'chromeExe':self.chrome_path.get(),
+                'cdpEndpoint':self.endpoint.get(),
                 'desktopBridgeFile':self._bridge_discovery(),
                 'modelSelection':getattr(self,'_model_selection',None)})
             if not value['workspaceDir']:raise SettingsError('请选择固定的学习工作区。')
@@ -1469,9 +1470,10 @@ class PickerApp:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--workspace', type=Path)
-    parser.add_argument('--endpoint', default='http://127.0.0.1:9222')
+    parser.add_argument('--endpoint', help='Override the saved loopback CDP address for this launch.')
     parser.add_argument('--smoke-test', type=Path, help='Create the UI without connecting, write a startup report, then exit.')
     parser.add_argument('--package-check', type=Path, help='Verify bundled resources without opening a window.')
+    parser.add_argument('--prepare-chrome', type=Path, help='Prepare optional Chrome for Testing and write a JSON result.')
     parser.add_argument('--backend-check',type=Path,help='Write a no-model CLI transport diagnostic without opening a window.')
     parser.add_argument('--desktop-check',type=Path,help='Read native desktop bridge health/models without opening a window or requesting permission.')
     parser.add_argument('--desktop-bridge',type=Path,help='Explicit desktop bridge discovery file; never a token value.')
@@ -1479,9 +1481,24 @@ def main():
     parser.add_argument('--cdp-task',type=Path,help='Run one scoped CDP task without opening a window.')
     parser.add_argument('--output',type=Path,help='Structured JSON result for --cdp-task (stdout is not required).')
     args = parser.parse_args()
-    if sum(bool(mode) for mode in (args.backend_check,args.desktop_check,args.cdp_task,args.package_check,args.smoke_test))>1:
+    if sum(bool(mode) for mode in (args.backend_check,args.desktop_check,args.cdp_task,args.package_check,args.smoke_test,args.prepare_chrome))>1:
         parser.error('Choose only one diagnostic or task mode')
     if args.output and not args.cdp_task:parser.error('--output is only valid with --cdp-task')
+    if args.prepare_chrome:
+        if not args.prepare_chrome.parent.is_dir():parser.error('--prepare-chrome report directory must already exist')
+        from chrome_setup import prepare_optional_chrome
+        result = {'status': 'preparing', 'message': '正在从 Google 准备完整的桌面 Chrome。'}
+        def save_chrome_result():
+            atomic_write(args.prepare_chrome, json.dumps(result, ensure_ascii=False, indent=2) + '\n')
+        save_chrome_result()
+        try:
+            result = prepare_optional_chrome(optional_chrome_directory().parents[1])
+            result['message'] = '专用 Chrome 已准备好。回到采集器点「启动 Chrome」。'
+        except Exception as error:
+            message = str(error) if isinstance(error, ValueError) else '请检查 Google 下载地址的网络访问和便携目录写权限。'
+            result = {'status': 'failed', 'message': sanitize_text(message, 250), 'errorType': type(error).__name__}
+        save_chrome_result()
+        raise SystemExit(2 if result['status'] == 'failed' else 0)
     if args.desktop_check:
         if not args.desktop_check.parent.is_dir():parser.error('--desktop-check report directory must already exist')
         report={'pickerVersion':VERSION,'transport':'zcode-native-extension-host','ok':False,
