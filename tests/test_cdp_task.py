@@ -31,17 +31,21 @@ class FakeCDP:
         self.connected = target
 
     def create_blank_page(self):
-        target = {'id': 'picker-created', 'type': 'page', 'url': 'about:blank'}
+        sequence = len(self.owner.new_urls)
+        target = {'id': 'picker-created' if not sequence else f'picker-created-{sequence + 1}',
+                  'type': 'page', 'url': 'about:blank'}
         self.owner.pages.append(target)
+        self.owner.new_urls[target['id']] = target['url']
         return target
 
     def call(self, method, params, timeout=10):
         self.calls.append((method, params))
         if method == 'Page.navigate':
-            self.owner.live_url = params['url']
+            self.owner.new_urls[self.connected['id']] = params['url']
             return {'frameId': 'fixture'}
         if 'document.readyState' in params.get('expression', '') and 'expectedLiveUrl' not in params['expression']:
-            return {'result': {'value': {'url': self.owner.live_url, 'title': 'Fixture orders', 'ready': 'complete'}}}
+            url = self.owner.new_urls.get(self.connected['id'], self.owner.live_url)
+            return {'result': {'value': {'url': url, 'title': 'Fixture orders', 'ready': 'complete'}}}
         if self.owner.failure:
             raise ConnectionError('RAW_PRIVATE_TRANSPORT_DETAIL')
         return {'result': {'value': copy.deepcopy(self.owner.observed)}}
@@ -64,6 +68,7 @@ class TaskTests(unittest.TestCase):
         self.pages = [{'id': 'wrong-same-url', 'type': 'page', 'url': PAGE},
                       {'id': 'selected-target', 'type': 'page', 'url': PAGE}]
         self.clients = []
+        self.new_urls = {}
         self.failure = False
         self.bundle = {'schemaVersion': 1, 'kind': 'annotated-controls-page-bundle',
                        'taskIntent': {'mode': 'learn-and-verify', 'contractVersion': 1},
@@ -140,6 +145,45 @@ class TaskTests(unittest.TestCase):
         self.assertEqual(len(self.pages), 1)
         self.job['reopenUrl'] = self.bundle['page']['url']
         self.assertTrue(self.execute()['reopened'])
+
+    def test_interleaved_research_ids_isolate_routes_and_leave_capture_target_untouched(self):
+        for research_id in ('history', 'details'):
+            self.job.update(operation='ensure-page', researchId=research_id,
+                            researchUrl=f'https://example.test/{research_id}')
+            opened = self.execute()
+            self.assertEqual(opened['status'], 'completed', opened)
+            self.assertTrue(opened['reopened'])
+            self.assertEqual(opened['researchId'], research_id)
+            same = self.execute()
+            self.assertFalse(same['reopened'])
+            self.assertEqual(same['targetId'], opened['targetId'])
+        self.job.pop('researchUrl')
+        self.job.update(operation='discover-controls', researchId='history')
+        first = self.execute()
+        self.job['researchId'] = 'details'
+        second = self.execute()
+        self.assertEqual(first['page']['path'], '/history')
+        self.assertEqual(second['page']['path'], '/details')
+        self.assertNotEqual(first['targetId'], second['targetId'])
+        self.job.pop('researchId')
+        self.job['operation'] = 'inspect'
+        self.assertEqual(self.execute()['status'], 'completed')
+        self.assertEqual(self.clients[-1].connected['id'], 'selected-target')
+
+    def test_research_refuses_foreign_urls_rebinding_and_unrelated_capture_actions(self):
+        self.job.update(operation='ensure-page', researchId='history', researchUrl='https://foreign.test/history')
+        self.assertEqual(self.execute()['error']['code'], 'research-origin-mismatch')
+        self.assertFalse(self.new_urls)
+        self.job['researchUrl'] = 'https://example.test/history'
+        self.assertEqual(self.execute()['status'], 'completed')
+        self.job['researchUrl'] = 'https://example.test/details'
+        self.assertEqual(self.execute()['error']['code'], 'research-scope-changed')
+        self.assertEqual(len(self.new_urls), 1)
+        self.job.pop('researchUrl')
+        self.action()
+        result = self.execute()
+        self.assertFalse(result['actionAttempted'])
+        self.assertEqual(result['error']['code'], 'research-page-needs-capture')
 
     def test_missing_or_duplicate_target_never_uses_same_url_fallback(self):
         for pages in ([self.pages[0]], [self.pages[1], self.pages[1]]):

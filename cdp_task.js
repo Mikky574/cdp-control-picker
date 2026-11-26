@@ -22,6 +22,7 @@ function runCdpTask(task) {
     return bounds.width > 0 && bounds.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
   };
   const enabled = element => !element.matches(':disabled') && element.getAttribute('aria-disabled') !== 'true' && !element.readOnly;
+  const roleCandidates = 'button,a,input,textarea,select,[role]';
   const evidence = element => ({tagName: element.tagName.toLowerCase(), role: role(element), roleSource: 'dom-role-hint', name: name(element), nameSource: 'dom-label-hint', visible: visible(element), enabled: enabled(element), ...(element.matches('input,textarea,select') && !sensitive(element) ? {hasValue: Boolean(element.value)} : {})});
   function locate(item) {
     const control = item.capture.control || {};
@@ -37,7 +38,7 @@ function runCdpTask(task) {
       try {
         if (strategy === 'css' && typeof value === 'string' && value.length <= 1500) matches = [...document.querySelectorAll(value)];
         else if (strategy === 'id' && typeof value === 'string' && value.length <= 1500) { const element = document.getElementById(value); matches = element ? [element] : []; }
-        else if (strategy === 'role' && typeof candidate.role === 'string' && typeof candidate.name === 'string') matches = [...document.querySelectorAll('button,a,input,textarea,select,[role]')].filter(element => role(element) === candidate.role && name(element) === candidate.name);
+        else if (strategy === 'role' && typeof candidate.role === 'string' && typeof candidate.name === 'string') matches = [...document.querySelectorAll(roleCandidates)].filter(element => role(element) === candidate.role && name(element) === candidate.name);
         else { observations.push({locator, status: 'invalid-locator'}); continue; }
       } catch (_) { observations.push({locator, status: 'invalid-locator'}); continue; }
       observations.push({locator, matchCount: matches.length});
@@ -53,10 +54,32 @@ function runCdpTask(task) {
     return {captureId: item.captureId, status, matchCount: observations.length ? observations[observations.length - 1].matchCount : 0, candidateEvidence: observations};
   }
   const publicControl = located => { const {element, ...result} = located; return result; };
+  function discover() {
+    const elements = [...document.querySelectorAll(roleCandidates)];
+    const controls = [];
+    for (const element of elements) {
+      if (element.closest('#__cdp_control_picker_root__,[hidden],[inert]') || !visible(element) || sensitive(element)) continue;
+      const elementRole = role(element);
+      if (!['button', 'link', 'textbox', 'searchbox', 'checkbox', 'radio', 'combobox',
+        'listbox', 'switch', 'tab', 'menuitem', 'spinbutton', 'slider'].includes(elementRole)) continue;
+      if (controls.length === 40) return {controls, truncated: true};
+      const elementName = name(element);
+      let locator = null;
+      if (/^[a-zA-Z_][\w-]{0,120}$/.test(element.id) && document.querySelectorAll('#' + element.id).length === 1) {
+        locator = {strategy: 'css', selector: '#' + element.id};
+      } else if (elementName && elements.filter(candidate => role(candidate) === elementRole && name(candidate) === elementName).length === 1) {
+        locator = {strategy: 'role', role: elementRole, name: elementName};
+      }
+      controls.push({tagName: element.tagName.toLowerCase(), role: elementRole, name: elementName,
+        visible: true, enabled: enabled(element), locator});
+    }
+    return {controls, truncated: false};
+  }
   try {
     if (task.actionPolicy !== undefined && task.actionPolicy !== 'infer-from-purpose') return blocked('unsupported-action-policy', '页面动作策略无效，未执行动作。');
     if (location.href !== task.expectedLiveUrl) return blocked('page-changed', '检查后页面路由已经变化，未操作控件。');
     if (task.operation === 'inspect') return {status: 'completed', actionAttempted: false, controls: task.captures.map(item => publicControl(locate(item)))};
+    if (task.operation === 'discover-controls') return {status: 'completed', actionAttempted: false, ...discover()};
     if (task.operation === 'read-page') {
       const chunks = []; let total = 0; let truncated = false;
       const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);

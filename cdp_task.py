@@ -1,4 +1,4 @@
-"""Bounded JSON jobs against one already selected, logged-in Chrome page."""
+"""Bounded JSON jobs against a selected page or an isolated research tab."""
 from __future__ import annotations
 
 import hashlib
@@ -18,7 +18,8 @@ from zcode_handoff import HandoffError, workspace_lock
 SCRIPT = Path(__file__).with_suffix('.js')
 _HASH = re.compile(r'[a-f0-9]{64}\Z')
 _ACTIONS = {'read', 'click', 'fill', 'select', 'check'}
-_OPERATIONS = {'ensure-page', 'inspect', 'read-page', 'act', 'observe-network', 'query-json'}
+_OPERATIONS = {'ensure-page', 'inspect', 'discover-controls', 'read-page', 'act', 'observe-network', 'query-json'}
+_RESEARCH_ID = re.compile(r'[a-z0-9][a-z0-9_-]{0,47}\Z')
 _LIVE_PAGE = '(() => ({url: location.href, title: document.title, ready: document.readyState}))()'
 _URL_SECRET = re.compile(r'(?:token|password|passwd|cookie|authorization|secret|credential|assertion|session|oauth|api[-_]?key|signature|(?:^|[?&#])code)[^&#?=]*=', re.I)
 
@@ -91,34 +92,67 @@ def _page_target(client, binding_path, binding, target_id, expected_hash):
     return matches, saved['urlSha256'], bool(matches)
 
 
-def _reopen_address(job, expected_page, initial_hash):
-    url = job.get('reopenUrl', expected_page['url'])
+def _known_web_page(url):
     if not isinstance(url, str) or len(url) > 4000 or re.search(r'[\x00-\x20\x7f\\]', url):
         raise TaskBlocked('unsafe-reopen-url', '恢复地址必须是已知、无凭证的 HTTP(S) 页面网址。')
     try:
         parsed = urlsplit(url)
-        valid = (parsed.scheme in {'http', 'https'} and parsed.username is None and parsed.password is None
-                 and page_identity(url) == expected_page
-                 and not _URL_SECRET.search(unquote('?' + parsed.query + '#' + parsed.fragment)))
+        if (parsed.scheme in {'http', 'https'} and parsed.username is None and parsed.password is None
+                and not _URL_SECRET.search(unquote('?' + parsed.query + '#' + parsed.fragment))):
+            return page_identity(url)
     except ValueError:
-        valid = False
-    if not valid:
+        pass
+    raise TaskBlocked('unsafe-reopen-url', '网址必须是已知、无凭证的 HTTP(S) 页面网址。')
+
+
+def _reopen_address(job, expected_page, initial_hash):
+    url = job.get('reopenUrl', expected_page['url'])
+    if _known_web_page(url) != expected_page:
         raise TaskBlocked('unsafe-reopen-url', '恢复地址超出原页面范围，或包含凭证相关参数。')
     if _fingerprint(url) != initial_hash and ('reopenUrl' not in job or url != expected_page['url']):
         raise TaskBlocked('reopen-url-needed', '学习包未保存完整路由。请用已验证的入口地址或原无凭证网址恢复。')
     return url
 
 
-def _ensure_page(client, job, learning, binding_path, binding, target_id, expected_page, initial_hash):
+def _research_scope(job, binding_path, original):
+    """A research ID owns one route and one target, independent of the capture tab."""
+    operation = job['operation']
+    address = job.get('researchUrl')
+    if operation == 'ensure-page':
+        if address is None:
+            raise TaskBlocked('research-url-needed', '准备研究页签时请给出已知的 researchUrl。')
+        page = _known_web_page(address)
+        url_hash = _fingerprint(address)
+        binding = {'source': original, 'researchId': job['researchId'],
+                   'researchPage': page, 'researchUrlSha256': url_hash}
+    else:
+        if 'researchUrl' in job:
+            raise TaskBlocked('unexpected-research-url', '研究地址仅用于 ensure-page；后续操作使用 researchId。')
+        if not binding_path.exists():
+            raise TaskBlocked('research-not-ready', '请先为这个 researchId 准备研究页签。')
+        binding = _read_object(binding_path, 16384).get('binding')
+        if (not isinstance(binding, dict) or binding.get('source') != original
+                or binding.get('researchId') != job['researchId']):
+            raise TaskBlocked('invalid-page-binding', '研究页签与当前学习包的绑定不一致。')
+        page, url_hash = binding.get('researchPage'), binding.get('researchUrlSha256')
+    if (not isinstance(page, dict) or page.get('origin') != original['page']['origin']
+            or not isinstance(url_hash, str) or not _HASH.fullmatch(url_hash)):
+        raise TaskBlocked('research-origin-mismatch', '研究页签只接受本学习包同源的已知网址。')
+    if binding_path.exists() and _read_object(binding_path, 16384).get('binding') != binding:
+        raise TaskBlocked('research-scope-changed', '该研究编号已绑定其他网址。为新网址使用新的 researchId。')
+    return page, url_hash, binding, address
+
+
+def _ensure_page(client, job, binding_path, binding, target_id, expected_page, initial_hash, open_url=None):
     try:
-        with workspace_lock(learning / '.page-recovery.lock'):
+        with workspace_lock(binding_path.with_suffix('.lock')):
             matches, expected_hash, previously_reopened = _page_target(
                 client, binding_path, binding, target_id, job.get('expectedUrlHash', initial_hash))
             if len(matches) > 1:
                 raise TaskBlocked('target-not-found', '原页签身份不唯一，无法恢复。')
             created = not matches
             if created:
-                url = _reopen_address(job, expected_page, initial_hash)
+                url = open_url if open_url is not None else _reopen_address(job, expected_page, initial_hash)
                 expected_hash = _fingerprint(url)
                 target = client.create_blank_page()
                 atomic_write(binding_path, json.dumps({
@@ -222,13 +256,16 @@ def run_task(input_path, output_path, client_factory=CDPClient):
         if not learning.is_relative_to(bundle_path.parent):
             raise TaskBlocked('outside-learning-directory', 'learning 目录不能链接到本页面包之外。')
         binding_path = _inside(learning / '.page-recovery.json', learning)
-        lock_path = _inside(learning / '.page-recovery.lock', learning)
+        lock_path = _inside(binding_path.with_suffix('.lock'), learning)
+        reserved_files = {binding_path, lock_path}
+        research_directory = _inside(learning / '.research', learning)
         _inside(source, learning)
         destination = _inside(output_path, learning)
-        if destination in {source, bundle_path, binding_path, lock_path} or destination.suffix.lower() != '.json':
+        if (destination in {source, bundle_path, binding_path, lock_path}
+                or destination.is_relative_to(research_directory) or destination.suffix.lower() != '.json'):
             destination = None
             raise TaskBlocked('invalid-output-path', '结果需要独立 JSON 文件，不能覆盖任务或来源。')
-        if source in {binding_path, lock_path}:
+        if source in {binding_path, lock_path} or source.is_relative_to(research_directory):
             raise TaskBlocked('invalid-input', '页签恢复记录不能用作任务。')
         if type(job.get('schemaVersion')) is not int or job['schemaVersion'] != 1 or operation not in _OPERATIONS:
             raise TaskBlocked('unsupported-job', '只支持 schemaVersion=1 及运行协议中列出的任务。')
@@ -269,6 +306,22 @@ def run_task(input_path, output_path, client_factory=CDPClient):
             raise TaskBlocked('missing-url-fingerprint', '缺少有效的当前路由指纹，不能猜测页面。')
         binding = {'endpoint': endpoint, 'sourceTargetId': target_id,
                    'page': expected_page, 'initialUrlSha256': initial_hash}
+        research_id = job.get('researchId')
+        research_url = None
+        if 'researchId' in job:
+            if not isinstance(research_id, str) or not _RESEARCH_ID.fullmatch(research_id):
+                raise TaskBlocked('invalid-research-id', 'researchId 需要 1 至 48 个小写字母、数字、下划线或连字符，且以字母或数字开头。')
+            result['researchId'] = research_id
+            binding_path = _inside(research_directory / ('tab-' + research_id + '.json'), research_directory)
+            _inside(binding_path.with_suffix('.lock'), research_directory)
+            research_page, research_hash, binding, research_url = _research_scope(job, binding_path, binding)
+            if operation in {'inspect', 'act'} and research_hash != initial_hash:
+                raise TaskBlocked('research-page-needs-capture', '此研究页使用不同路由，请先查看候选控件，再为该页面单独采集后执行。')
+            expected_page, initial_hash = research_page, research_hash
+            expected_hash = job.get('expectedUrlHash', initial_hash)
+            target_id = None
+        elif operation == 'discover-controls' or 'researchUrl' in job:
+            raise TaskBlocked('research-id-needed', '查看新控件或指定研究地址需要独立的 researchId。')
         ready_path = None
         if operation in {'observe-network', 'query-json'} and not expected_page['origin'].startswith(('http://', 'https://')):
             raise TaskBlocked('network-page-required', '接口观察和查询需要选中 HTTP(S) 页面。')
@@ -281,7 +334,8 @@ def run_task(input_path, output_path, client_factory=CDPClient):
                 if not isinstance(ready_value, str) or not Path(ready_value).is_absolute():
                     raise TaskBlocked('invalid-ready-path', '监听就绪文件需要独立绝对路径。')
                 ready_path = _inside(ready_value, learning)
-                if ready_path in {destination, source, binding_path, lock_path} or ready_path.suffix.lower() != '.json' or ready_path.exists():
+                if (ready_path in {destination, source} | reserved_files or ready_path.is_relative_to(research_directory)
+                        or ready_path.suffix.lower() != '.json' or ready_path.exists()):
                     raise TaskBlocked('invalid-ready-path', '监听就绪文件需要不存在的独立 JSON 文件。')
         if operation == 'query-json':
             query = prepare_query(job)
@@ -309,15 +363,15 @@ def run_task(input_path, output_path, client_factory=CDPClient):
                 return duplicate
         client = client_factory(endpoint)
         if operation == 'ensure-page':
-            live, target_id, reopened = _ensure_page(client, job, learning, binding_path, binding,
-                                                     target_id, expected_page, initial_hash)
+            live, target_id, reopened = _ensure_page(client, job, binding_path, binding,
+                                                     target_id, expected_page, initial_hash, research_url)
             expected_hash = _fingerprint(live['url'])
         else:
             matches, bound_hash, _ = _page_target(client, binding_path, binding, target_id, initial_hash)
-            if (not matches and operation in {'inspect', 'read-page', 'query-json'}
+            if (not matches and research_id is None and operation in {'inspect', 'read-page', 'query-json'}
                     and action_policy == 'infer-from-purpose' and expected_hash == initial_hash
                     and expected_page['origin'].startswith(('http://', 'https://'))):
-                live, recovered_id, reopened = _ensure_page(client, job, learning, binding_path, binding,
+                live, recovered_id, reopened = _ensure_page(client, job, binding_path, binding,
                                                             target_id, expected_page, initial_hash)
                 expected_hash = _fingerprint(live['url'])
                 result.update(targetId=recovered_id, reopened=reopened)
@@ -327,6 +381,8 @@ def run_task(input_path, output_path, client_factory=CDPClient):
                 expected_hash = job.get('expectedUrlHash', bound_hash)
                 client.connect(matches[0])
                 live = _eval(client, _LIVE_PAGE)
+                if research_id is not None:
+                    result['targetId'] = matches[0]['id']
         live_url = live.get('url')
         if not isinstance(live_url, str):
             raise TaskBlocked('missing-page-url', '页面没有返回当前地址。')

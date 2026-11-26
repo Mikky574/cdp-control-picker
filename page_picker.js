@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   if (window !== window.top) return;
-  const VERSION = '1.0.1';
+  const VERSION = '1.0.2';
   if (window.__cdpControlPicker && window.__cdpControlPicker.state) {
     try {
       if (window.__cdpControlPicker.state().version === VERSION) {
@@ -20,6 +20,7 @@
   const registry = new Map();
   const listeners = [];
   let enabled = false;
+  let bannerDismissed = false;
   let host = null;
   let shadow = null;
   let ui = null;
@@ -187,12 +188,12 @@
     shadow.innerHTML = `<style>
       :host{all:initial!important;position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;z-index:2147483647!important;pointer-events:none!important;font-family:"Microsoft YaHei","Segoe UI",sans-serif!important;color:#142139!important;font-size:14px!important;line-height:1.55!important}
       *{box-sizing:border-box} [hidden]{display:none!important} button,input,textarea,select{font:inherit}button{cursor:pointer}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid #317be8;outline-offset:2px}
-      .banner{position:fixed;top:12px;left:12px;max-width:calc(100vw - 24px);padding:10px 13px;background:#142139;color:#fff;border-radius:9px;box-shadow:0 4px 24px #14213922;pointer-events:auto;display:flex;align-items:center;gap:14px;font-size:13px}.banner small{display:block;font-size:11px;color:#c7d8f0}.banner button{background:#fff;color:#142139;border:0;border-radius:5px;padding:5px 10px;white-space:nowrap}
+      .banner{position:fixed;top:12px;left:12px;max-width:calc(100vw - 24px);padding:8px 9px 8px 11px;background:#142139;color:#fff;border-radius:9px;box-shadow:0 4px 24px #14213922;pointer-events:auto;display:flex;align-items:center;gap:7px;font-size:13px}.banner small{display:block;font-size:11px;color:#c7d8f0}.banner button{background:#fff;color:#142139;border:0;border-radius:5px;padding:5px 8px;white-space:nowrap}.banner .grip{cursor:grab;touch-action:none;user-select:none;padding-right:4px}.banner .grip[data-dragging]{cursor:grabbing}.banner .dismiss{background:transparent;color:#fff;font-size:18px;line-height:1;padding:6px}
       .outline{position:fixed;border:3px solid #0b7c70;background:#0b7c7010;box-shadow:0 0 0 1px #fff;pointer-events:none;border-radius:3px}
       .panel{position:fixed;width:390px;max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);overflow:auto;padding:18px;background:#fff;border:1px solid #d2ddea;border-radius:12px;box-shadow:0 12px 44px #14213933;pointer-events:auto}.panel h2{font-size:17px;margin:0 0 4px}.preview{font-size:12px;color:#5a6b83;overflow-wrap:anywhere;margin:0 0 13px}.panel label{font-size:13px;display:block;margin:11px 0 4px;font-weight:600}.panel input,.panel textarea,.panel select{display:block;width:100%;border:1px solid #bdcce0;border-radius:6px;background:#fff;color:#142139;padding:8px 10px;font-size:14px;min-height:38px}.panel textarea{resize:vertical;min-height:68px}.hint{font-size:12px;color:#5a6b83;margin-top:8px}.error{color:#b42318;font-size:13px;margin-top:9px}.actions{display:flex;justify-content:flex-end;gap:9px;margin-top:15px}.actions button{border:1px solid #c7d4e6;border-radius:6px;background:#fff;color:#142139;padding:7px 15px;min-height:36px}.actions button.primary{background:#175bd7;color:#fff;border-color:#175bd7}.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);max-width:calc(100vw - 28px);padding:11px 16px;background:#142139;color:#fff;border-radius:8px;box-shadow:0 4px 24px #14213933;pointer-events:none;overflow-wrap:anywhere;font-size:13px}
       @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}} @media print{:host{display:none!important}}
     </style><div class="outline" hidden aria-hidden="true"></div>
-    <div class="banner" hidden><div><strong>控件采集模式</strong><small>右键选择后填写用途 · 仅普通主页面，暂不支持 iframe / Shadow DOM</small></div><button type="button" data-ui="stop">停止</button></div>
+    <div class="banner" hidden><div class="grip" title="拖动提示"><strong>控件采集模式</strong><small>在控件上右键标注</small></div><button type="button" data-ui="stop">停止</button><button type="button" class="dismiss" data-ui="dismiss" aria-label="隐藏提示，继续采集" title="隐藏提示，继续采集">×</button></div>
     <section class="panel" role="dialog" aria-label="记录控件用途" hidden><h2>记录这个控件</h2><p class="preview"></p><form novalidate>
       <label for="picker-name">控件名称</label><input id="picker-name" name="name" maxlength="120" autocomplete="off">
       <label for="picker-description">这个位置是做什么的？ <span aria-hidden="true">*</span></label><textarea id="picker-description" name="description" maxlength="1500" required placeholder="例如：打开当前记录的只读详情"></textarea>
@@ -201,15 +202,49 @@
     </form></section><div class="toast" role="status" aria-live="polite" hidden></div>`;
     const find = selector => shadow.querySelector(selector);
     ui = { outline: find('.outline'), banner: find('.banner'), panel: find('.panel'), preview: find('.preview'), form: find('form'), name: find('#picker-name'), description: find('#picker-description'), result: find('#picker-result'), hint: find('.hint'), error: find('.error'), toast: find('.toast') };
+    const grip = find('.grip');
+    let drag = null;
+    grip.addEventListener('pointerdown', event => {
+      if (!event.isPrimary || event.button !== 0) return;
+      const rect = ui.banner.getBoundingClientRect();
+      drag = { id: event.pointerId, x: event.clientX - rect.left, y: event.clientY - rect.top };
+      grip.setPointerCapture(event.pointerId);
+      grip.setAttribute('data-dragging', '');
+    });
+    grip.addEventListener('pointermove', event => {
+      if (drag?.id === event.pointerId) placeBanner(event.clientX - drag.x, event.clientY - drag.y);
+    });
+    grip.addEventListener('lostpointercapture', () => {
+      drag = null;
+      grip.removeAttribute('data-dragging');
+    });
+    find('[data-ui="dismiss"]').addEventListener('click', () => {
+      bannerDismissed = true;
+      ui.banner.hidden = true;
+    });
     find('[data-ui="stop"]').addEventListener('click', disable);
     find('[data-ui="cancel"]').addEventListener('click', closeForm);
     ui.form.addEventListener('submit', saveForm);
-    for (const name of ['click', 'dblclick', 'input', 'change', 'submit', 'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'contextmenu']) shadow.addEventListener(name, event => event.stopPropagation());
+    for (const name of ['click', 'dblclick', 'input', 'change', 'submit', 'pointerdown', 'pointermove', 'pointerup', 'mousedown', 'mouseup', 'contextmenu']) shadow.addEventListener(name, event => event.stopPropagation());
     document.documentElement.appendChild(host);
-    ui.banner.hidden = !enabled;
+    ui.banner.hidden = !enabled || bannerDismissed;
     return true;
   }
   function onReady() { readyPending = false; if (enabled) createUI(); }
+  function placeBanner(left, top) {
+    const {width, height} = ui.banner.getBoundingClientRect();
+    Object.assign(ui.banner.style, {
+      left: `${Math.max(0, Math.min(left, innerWidth - width))}px`,
+      top: `${Math.max(0, Math.min(top, innerHeight - height))}px`
+    });
+  }
+  function resizeUI() {
+    if (ui && !ui.banner.hidden && ui.banner.style.left) {
+      const {left, top} = ui.banner.getBoundingClientRect();
+      placeBanner(left, top);
+    }
+    updatePosition();
+  }
   function notify(text, duration = 5000) {
     message = text;
     if (!createUI()) return;
@@ -340,11 +375,12 @@
   function enable() {
     if (enabled) { createUI(); return state(); }
     enabled = true;
+    bannerDismissed = false;
     for (const name of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'auxclick']) listen(window, name, blockRightMouse, { capture: true, passive: false });
     listen(window, 'contextmenu', onContextMenu, { capture: true, passive: false });
     listen(window, 'keydown', onKeyDown, true);
     listen(window, 'scroll', updatePosition, { capture: true, passive: true });
-    listen(window, 'resize', updatePosition, { passive: true });
+    listen(window, 'resize', resizeUI, { passive: true });
     createUI();
     message = '采集已开启。右键选控件，不会自动执行控件动作。';
     return state();
@@ -390,7 +426,7 @@
     return { ok: false, matchCount: bestCount, reason: bestCount > 1 ? 'multiple-matches' : 'no-unique-visible-match', message: '未找到符合类型的唯一可见控件；未选择 first/nth。' };
   }
   function state() {
-    return { version: VERSION, enabled, formOpen: Boolean(selected && ui && !ui.panel.hidden), support: 'ordinary-main-frame-only', limitations: ['iframe', 'shadow-dom', 'canvas', 'earlier-page-right-mouse-listeners'], message };
+    return { version: VERSION, enabled, bannerVisible: Boolean(ui && !ui.banner.hidden), formOpen: Boolean(selected && ui && !ui.panel.hidden), support: 'ordinary-main-frame-only', limitations: ['iframe', 'shadow-dom', 'canvas', 'earlier-page-right-mouse-listeners'], message };
   }
   const api = { enable, disable, highlight, state };
   Object.defineProperty(api, '_resolveElement', { value: resolveElement, enumerable: false });
