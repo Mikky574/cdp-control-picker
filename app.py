@@ -27,7 +27,7 @@ SCRIPT = RESOURCE_DIR / 'page_picker.js'
 ICON = RESOURCE_DIR / 'assets' / 'app-icon.ico'
 VERSION = '0.2.0'
 BINDING = '__cdpControlPickerSave'
-SAVE_WAIT_MESSAGE = '正在保存标注，完成后再整理。'
+SAVE_WAIT_MESSAGE = '正在保存标注，完成后再发送。'
 
 
 def skill_source():
@@ -139,8 +139,8 @@ class PickerApp:
         self.status_label=tk.Label(body,textvariable=self.status,bg='#f5f7fa',fg='#526780',font=('Microsoft YaHei UI',9),wraplength=354,justify='left',anchor='w');self.status_label.grid(row=4,column=0,sticky='ew',pady=(6,0))
         self.saved_label=ttk.Label(body,textvariable=self.saved_status,foreground='#087b6b',font=('Microsoft YaHei UI',8),wraplength=354,justify='left',anchor='w');self.saved_label.grid(row=5,column=0,sticky='ew',pady=(4,0))
         footer=ttk.Frame(body);footer.grid(row=6,column=0,sticky='ew',pady=(7,0));footer.columnconfigure(0,weight=1)
-        self.send_button=ttk.Button(footer,text='整理本页标注（ZCode）',style='Primary.TButton',command=self.send_page_to_zcode);self.send_button.grid(row=0,column=0,sticky='ew')
-        self.export_button=ttk.Button(footer,text='复制任务',style='Small.TButton',command=self.export_page_task);self.export_button.grid(row=0,column=1,padx=(6,0),sticky='e')
+        self.send_button=ttk.Button(footer,text='发给 ZCode',style='Primary.TButton',command=self.send_page_to_zcode);self.send_button.grid(row=0,column=0,sticky='ew')
+        self.export_button=ttk.Button(footer,text='复制交接说明',style='Small.TButton',command=self.export_page_task);self.export_button.grid(row=0,column=1,padx=(6,0),sticky='e')
         # Kept off-layout for backend compatibility; the actual field opens in Settings.
         self.endpoint_entry=ttk.Entry(r,textvariable=self.endpoint)
         self._fit_window(r,body,380,210,wraps=(self.status_label,self.saved_label))
@@ -220,7 +220,7 @@ class PickerApp:
         self.connect_button.configure(state='disabled' if self.connecting or self.closing or self.capture_enabled or saving else 'normal',text='采集中 · 请在网页右键' if self.capture_enabled else '开启右键采集' if connected else '连接并开启采集')
         self.disconnect_button.configure(state='normal' if connected and not self.connecting and not self.closing and not saving else 'disabled')
         self.page_combo.configure(state='disabled' if connected or self.connecting else 'readonly')
-        self.send_button.configure(state='disabled' if self.sending or self.exporting or self.closing or saving else 'normal',text='正在交接…' if self.sending else '正在保存标注…' if saving else '整理本页标注（ZCode）')
+        self.send_button.configure(state='disabled' if self.sending or self.exporting or self.closing or saving else 'normal',text='正在交接…' if self.sending else '正在保存标注…' if saving else '发给 ZCode')
         self.export_button.configure(state='disabled' if self.exporting or self.sending or self.closing or saving else 'normal')
         for widgets,disabled in ((getattr(self,'_settings_connection_controls',()),connected or self.connecting),
                                  (getattr(self,'_settings_workspace_controls',()),connected or self.connecting or self.sending or self.exporting or saving),
@@ -281,12 +281,12 @@ class PickerApp:
                     self.status.set(f'已合并 {value["captureCount"]} 个控件，但复制失败。请重试复制或在记录目录打开任务。')
                     self._log('任务已导出，剪贴板复制失败：'+str(error))
                 else:
-                    self.status.set(f'已合并 {value["captureCount"]} 个控件，任务已复制。请贴入 ZCode 对话。')
+                    self.status.set(f'已合并 {value["captureCount"]} 个控件，交接说明已复制。请贴入 ZCode 对话。')
                 self._log(f'已导出本页任务：{value["bundleId"]}，{value["captureCount"]} 个已标注控件。')
             elif kind=='page-export-finished':
                 self.exporting=False;self.sending=False
             elif kind=='handoff-bundle':
-                self.status.set(f'已合并 {value["captureCount"]} 个控件，正在运行 ZCode 任务并登记会话…')
+                self.status.set(f'已合并 {value["captureCount"]} 个控件，正在交给 ZCode…')
                 self._log(f'已准备页面任务：{value["bundleId"]}，{value["captureCount"]} 个控件；等待 CLI 完成与会话索引登记。')
             elif kind=='handoff-progress':
                 if isinstance(value,dict):
@@ -295,7 +295,7 @@ class PickerApp:
             elif kind=='handoff-result':
                 registered=isinstance(value,dict) and value.get('status')=='registered' and value.get('indexRegistered') is True and isinstance(value.get('sessionId'),str) and bool(value['sessionId'].strip())
                 if registered:
-                    self.status.set('已登记到 ZCode，打开同一项目继续聊。')
+                    self.status.set('已交给 ZCode，可在该对话继续补充。')
                     self._log('已完成 ZCode 任务并登记会话索引；打开同一项目继续聊。会话：'+value['sessionId'])
                 else:
                     message=value.get('message') if isinstance(value,dict) else ''
@@ -426,7 +426,7 @@ class PickerApp:
         ttk.Label(body,text='ZCode 程序').grid(row=3,column=0,sticky='w',pady=(12,0))
         zcode=ttk.Entry(body,textvariable=self.zcode_path);zcode.grid(row=3,column=1,sticky='ew',pady=(12,0))
         browse_zcode=ttk.Button(body,text='选择',width=5,command=self.choose_zcode);browse_zcode.grid(row=3,column=2,padx=(8,0),pady=(12,0))
-        hint=ttk.Label(body,text='发送会把本页已标注控件合并，并复用上方记录目录作为 ZCode 工作区。\n任务权限：完全访问。后台任务完成并登记会话后，打开同一项目继续聊。\nChrome 路径留空可自动寻找；连接期间不能更改浏览器入口和记录目录。',foreground='#5a6b83',wraplength=520,justify='left');hint.grid(row=4,column=0,columnspan=3,sticky='ew',pady=(15,12))
+        hint=ttk.Label(body,text='发送会把本页已标注控件合并，并复用上方记录目录作为 ZCode 工作区。\n任务权限：完全访问。AI 读取标注并确认收到，后续由你在 ZCode 对话里继续。\nChrome 路径留空可自动寻找；连接期间不能更改浏览器入口和记录目录。',foreground='#5a6b83',wraplength=520,justify='left');hint.grid(row=4,column=0,columnspan=3,sticky='ew',pady=(15,12))
         def done():
             if not self.workspace_value.strip():self.status.set('记录目录不能为空。');return
             self.reload_records();self._log('已应用本次设置。');w.destroy()

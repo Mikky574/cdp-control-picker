@@ -154,7 +154,8 @@ class PageBundleTests(unittest.TestCase):
         self.assertIn('page-bundle.json', task)
         self.assertIn('不连接网站', task)
         self.assertIn('缺少流程不编造', task)
-        self.assertIn(str(Path(exported['taskPath'])), exported['shortTask'])
+        self.assertIn(str(Path(exported['contextPath'])), exported['shortTask'])
+        self.assertNotIn(str(Path(exported['taskPath'])), exported['shortTask'])
         for key, (content, modified) in originals.items():
             self.assertEqual(Path(original[key]).read_bytes(), content)
             self.assertEqual(Path(original[key]).stat().st_mtime_ns, modified)
@@ -170,6 +171,41 @@ class PageBundleTests(unittest.TestCase):
         self.assertEqual(first['captureCount'], 1)
         self.assertEqual(second['captureCount'], 2)
         self.assertEqual(Path(first['bundlePath']).read_bytes(), first_bytes)
+
+    def test_context_handoff_reads_full_page_bundle_then_waits_for_user(self):
+        self.capture('cap-first')
+        self.capture('cap-second')
+        exported = self.workspace.export_page_bundle('https://example.test/orders')
+        context_path = Path(exported['contextPath'])
+        self.assertEqual(context_path.parent, Path(exported['bundlePath']).parent)
+        self.assertEqual(context_path.name, 'context.md')
+        context = context_path.read_text(encoding='utf-8')
+        self.assertIn('完整读取 [page-bundle.json](page-bundle.json)', context)
+        self.assertIn('2 个已标注控件的位置与用途上下文', context)
+        self.assertIn('source.capturePath', context)
+        self.assertIn('source.descriptionPath', context)
+        self.assertIn('不要读取本目录或采集卡目录中的 task.md', context)
+        self.assertIn('不自动生成、改写或运行技能、页面契约、脚本或其他文件', context)
+        self.assertIn('不连接网站', context)
+        self.assertIn('等待用户下一条要求', context)
+        self.assertIn('2 个控件上下文后等待我后续要求', exported['shortTask'])
+        self.assertNotIn('统一能力草稿', exported['shortTask'])
+        self.assertNotIn('(task.md)', context)
+        self.assertNotIn('generated/', exported['shortTask'])
+
+    def test_context_handoff_keeps_legacy_task_and_original_source_hashes_compatible(self):
+        original = self.capture()
+        source = Path(original['capturePath'])
+        original_bytes = source.read_bytes()
+        exported = self.workspace.export_page_bundle('https://example.test/orders')
+        bundle = self.read_bundle(exported)
+        self.assertEqual(bundle['captures'][0]['source']['sha256'], hashlib.sha256(original_bytes).hexdigest())
+        self.assertEqual(source.read_bytes(), original_bytes)
+        self.assertIn('统一页面 skill、contract 和候选 runner', Path(exported['taskPath']).read_text(encoding='utf-8'))
+        self.assertEqual(list(Path(exported['generatedPath']).iterdir()), [])
+        context = Path(exported['contextPath']).read_text(encoding='utf-8')
+        self.assertIn('generation 字段、task.md 和 generated/ 目录仅为兼容旧格式保留，不是本次任务要求', context)
+        self.assertEqual(bundle['generation']['outputs'][0], 'generated/SKILL.md')
 
 
 if __name__ == '__main__':

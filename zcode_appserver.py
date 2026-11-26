@@ -287,9 +287,19 @@ class ZCodeAppServer:
             self.request("session/setMode", {"sessionId": native_id, "mode": self.mode})
             snapshot = _snapshot(self.request("session/read", {"sessionId": native_id}), native_id)
             self._workspace_matches(snapshot)
-            modes = [snapshot["session"].get("mode"), snapshot.get("settings", {}).get("permission", {}).get("mode"),
-                     snapshot.get("settings", {}).get("mode", {}).get("current")]
-            if self.mode != "plan" and (not any(modes) or any(value is not None and value != self.mode for value in modes)):
+            # In installed 0.17 cold drafts, session/projection.mode may remain
+            # "build" while the native permission settings already report yolo.
+            # Those presentation fields are not additional permission votes.
+            # Require the available authoritative settings to agree; only an
+            # older snapshot with no settings object can use session.mode.
+            if "settings" in snapshot:
+                settings = snapshot["settings"]
+                modes = [settings.get("permission", {}).get("mode"),
+                         settings.get("mode", {}).get("current")]
+                modes = [value for value in modes if value is not None]
+            else:
+                modes = [snapshot["session"].get("mode")]
+            if self.mode != "plan" and (not modes or any(value != self.mode for value in modes)):
                 raise AppServerError("原生会话未确认所选权限模式，未发送任务。")
             self._bound = native_id
             self.last_binding = {"sessionId": self._bound, "mode": self.mode,

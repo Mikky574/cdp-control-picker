@@ -104,9 +104,22 @@ class BackgroundHandoffTests(unittest.TestCase):
         self.server.bind = lambda: {'session': {'sessionId': 'sess-fixture'},
             'settings': {'permission': {'mode': 'yolo'}, 'mode': {'current': 'plan'}}}
         result = self.handoff().send(self.bundle)
-        self.assertEqual(result['status'], 'unknown')
+        self.assertEqual(result['status'], 'failed')
+        self.assertFalse(result['submissionAttempted'])
         self.assertEqual(result['sessionId'], 'sess-fixture')
         self.assertEqual(self.server.calls, [])
+
+    def test_bind_failure_before_send_allows_explicit_retry_without_duplicate_model_call(self):
+        original = self.server.bind
+        self.server.bind = lambda: (_ for _ in ()).throw(ValueError('fixture bind failure'))
+        first = self.handoff().send(self.bundle)
+        self.assertEqual(first['status'], 'failed')
+        self.assertFalse(first['submissionAttempted'])
+        self.server.bind = original
+        second = self.handoff().send(self.bundle)
+        self.assertEqual(second['status'], 'registered')
+        self.assertTrue(self.handoff().send(self.bundle)['duplicate'])
+        self.assertEqual(len(self.server.calls), 1)
 
     def test_mismatched_index_receipt_cannot_report_registration(self):
         self.index.register = lambda *args, **kwargs: {'indexRegistered': True,

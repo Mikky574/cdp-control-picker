@@ -1,4 +1,4 @@
-"""Background CLI execution and versioned desktop-index registration.
+"""Hand annotated controls to one native ZCode conversation.
 
 No desktop input, shell, credential changes, or implicit model retries.
 """
@@ -98,7 +98,10 @@ class ZCodeHandoff:
             {'captureId': item.get('captureId'), 'sha256': (item.get('source') or {}).get('sha256'),
              'capture': item.get('capture')} for item in captures]}
         fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
-        return task, payload, fingerprint
+        context = self._inside(bundle['contextPath']) if bundle.get('contextPath') else None
+        if context is not None and (not context.is_file() or context.parent != task.parent):
+            raise HandoffError('控件上下文文件不存在或来源不一致。')
+        return task, context, path, payload, fingerprint
 
     def _previous(self, fingerprint):
         for path in sorted(self.journal.glob('handoff-*/state.json'), reverse=True):
@@ -107,6 +110,8 @@ class ZCodeHandoff:
             except (OSError, ValueError):
                 continue
             if state.get('fingerprint') == fingerprint:
+                if state.get('status') == 'failed' and state.get('submissionAttempted') is False:
+                    continue  # Explicit retry is safe only before any prompt call.
                 return path, state
         return None, None
 
@@ -146,7 +151,7 @@ class ZCodeHandoff:
                     or receipt.get('mode') != state.get('mode', self.mode)):
                 raise HandoffError('索引回执没有确认同一个真实会话。')
             state.update(status='registered', indexRegistered=True, indexReceipt=receipt,
-                         message='已登记到 ZCode，打开同一项目继续聊。')
+                         message='已交给 ZCode，可在该对话继续补充。')
         except Exception as error:
             state.update(status='index_failed', indexRegistered=False,
                          message='后台会话已保存，桌面索引登记失败；再次发送仅重试登记，不会重新调用模型。',
@@ -157,7 +162,7 @@ class ZCodeHandoff:
 
     def send(self, bundle, on_event=None):
         with workspace_lock(self.journal / '.send.lock'):
-            task, payload, fingerprint = self._bundle(bundle)
+            task, context, bundle_path, payload, fingerprint = self._bundle(bundle)
             previous_path, previous = self._previous(fingerprint)
             if previous:
                 if previous.get('status') in {'registered', 'index_failed'} and previous.get('sessionId'):
@@ -185,18 +190,27 @@ class ZCodeHandoff:
             page = payload.get('page') or {}
             label = page.get('title') or page.get('path') or '本页'
             title = sanitize_text(f'CDP · {label} · {payload["captureCount"]} 个控件', 100)
-            prompt = (f'【CDP:{request_id}】读取“{task}”，按其中说明整理本页全部 '
-                      f'{payload["captureCount"]} 个已标注控件的统一能力草稿。')
+            if context is None:
+                context = directory / 'context.md'
+                atomic_write(context, f'# 本页控件上下文\n\n完整读取 `{bundle_path}`，'
+                             f'理解本页 {payload["captureCount"]} 个已标注控件的位置与用途。\n\n'
+                             '本次只简短确认收到并等待用户后续要求；不要自动生成技能、脚本或计划，'
+                             '不要操作网页、执行控件或读取旧的生成任务。\n')
+            prompt = (f'接收本页全部 {payload["captureCount"]} 个已标注控件的上下文。'
+                      f'读取“{context}”，简短确认收到后等待我补充。【CDP:{request_id}】')
             state = {'schemaVersion': 1, 'requestId': request_id, 'bundleId': payload['bundleId'],
                      'captureCount': payload['captureCount'], 'fingerprint': fingerprint,
                      'createdAt': _now(), 'status': 'prepared', 'indexRegistered': False,
+                     'submissionAttempted': False,
                      'conversationTitle': title, 'workspace': str(self.root), 'taskPath': str(task),
+                     'contextPath': str(context), 'handoffIntent': 'context-only',
                      'mode': self.mode, 'transport': 'app-server-stdio',
                      'journalPath': str(directory), 'message': '正在启动 ZCode 后台任务。'}
             self._save(state_path, state)
             self._save(directory / 'request.json', {'requestId': request_id, 'prompt': prompt,
-                                                    'taskPath': str(task), 'bundleId': payload['bundleId']})
-            self._notify(on_event, 'running', 'ZCode 正在后台整理本页控件；无需保持前台。')
+                                                    'contextPath': str(context), 'taskPath': str(task),
+                                                    'bundleId': payload['bundleId']})
+            self._notify(on_event, 'running', '正在把本页标注交给 ZCode；无需保持前台。')
             try:
                 with self.server_factory(commandPath=self.command, cwd=self.root,
                                          timeout_seconds=self.timeout, mode=self.mode) as server:
@@ -206,13 +220,13 @@ class ZCodeHandoff:
                         raise HandoffError('后台没有返回真实会话 ID。')
                     state.update(status='running', sessionId=session_id,
                                  binding=getattr(server, 'last_binding', {}),
-                                 message='ZCode 会话已建立，正在后台整理。')
+                                 message='ZCode 会话已建立，正在读取控件资料。')
                     self._save(state_path, state)
                     self._check_mode(initial)
                     def progress(event):
                         kind = str(event.get('type') or event.get('phase') or 'running')
                         labels = {'request_admitted': 'ZCode 已接收，等待模型回复。',
-                                  'turn_started': 'ZCode 正在整理本页标注（完全访问）。',
+                                  'turn_started': 'ZCode 正在读取本页标注（完全访问）。',
                                   'tool.started': 'ZCode 正在使用工具：' + sanitize_text(event.get('toolName', ''), 80),
                                   'tool.completed': '工具已完成，正在整理结果。',
                                   'tool.failed': '工具返回失败，等待 ZCode 确认本轮结果。',
@@ -224,6 +238,8 @@ class ZCodeHandoff:
                         state.update(phase=kind, message=message)
                         self._save(state_path, state)
                         self._notify(on_event, kind, message)
+                    state['submissionAttempted'] = True
+                    self._save(state_path, state)
                     result = server.prompt(session_id, prompt, input_id=request_id, on_event=progress)
                     if (result.get('session') or {}).get('sessionId') != session_id:
                         raise HandoffError('后台结果与本次会话不一致。')
@@ -234,8 +250,11 @@ class ZCodeHandoff:
                 state.update(status='index_failed')
                 self._save(state_path, state)
             except Exception as error:
-                state.update(status='unknown', finishedAt=_now(), error=sanitize_text(error, 1500),
-                             message='后台任务结果未确认，请检查原记录；不会自动重发。')
+                attempted = state['submissionAttempted']
+                state.update(status='unknown' if attempted else 'failed', finishedAt=_now(),
+                             error=sanitize_text(error, 1500),
+                             message=('发送结果未确认，请检查原对话；不会自动重发。' if attempted
+                                      else 'ZCode 连接未完成，尚未发送模型消息，可以重试。'))
                 self._save(state_path, state)
                 return state
             return self._register(state_path, state, on_event)

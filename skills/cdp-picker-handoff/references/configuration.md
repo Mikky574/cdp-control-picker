@@ -1,42 +1,46 @@
-# 采集与 app-server 配置
+# 采集与交接配置
 
-当前适配目标为安装版 ZCode 3.16.3.8992 / 内置 CLI 0.17.0，不推断其他版本兼容。发布与真实索引、GUI、第二轮的验收状态以随包记录为准；v0.1.0 为旧面板单卡流程。
+当前安装适配目标为 ZCode 3.16.3.8992 / 同包 CLI 0.17.0，不推断其他版本兼容。发布及最新首轮交接验收以随包记录为准。
 
-## 核对入口
+## 入口
 
 | 项目 | 约定 |
 |---|---|
-| CDP | `http://127.0.0.1:9222` 是本机浏览器端点，不是业务 URL |
-| Chrome | 固定专用 Google Chrome/profile，由本人登录；复用已有端点 |
-| 默认数据 | 源码在 `.local/`；冻结 EXE 旁为 `CDP-Picker-Workspace` 与 `CDP-Chrome-Profile` |
-| ZCode | 真实安装的 `ZCode.exe` 与同包 `resources/glm/zcode.cjs` |
-| 运行方式 | Electron Node 子进程启动 app-server，stdio 协议；工作区为采集工作区 |
-| 本任务权限 | 用户明确授权 `mode=yolo` 完全访问，仅作用于采集器任务 |
-| 记录 | `.logs/picker.log` 与 `.handoffs/handoff-.../` 的 request/state/result |
+| CDP | http://127.0.0.1:9222 是本机浏览器端点，不是业务 URL |
+| Chrome | 固定专用 Google Chrome/profile，由本人登录，复用已有端点 |
+| 数据 | 源码默认 .local/；冻结 EXE 旁为 CDP-Picker-Workspace 与 CDP-Chrome-Profile |
+| ZCode | 真实安装的 ZCode.exe 与同包 resources/glm/zcode.cjs |
+| 主通道 | Electron Node 子进程运行 app-server --stdio，cwd 为采集工作区 |
+| 权限 | 用户保留本工具选定工作区/会话 yolo 完全访问，不改其他项目或全局模型 |
+| 记录 | .logs/picker.log 与 .handoffs/handoff-.../ 的 request/state/result |
 
-设置目前仅本次运行生效。工作区应明确且可写；不克隆日常 Chrome 默认资料，不重启共享浏览器，不导出 Cookie/token。端点可达不证明登录账号正确。
+设置目前仅本次运行生效。工作区应明确可写；不克隆日常 Chrome 默认资料，不重启共享浏览器，不导出 Cookie/token。端点可达不证明登录账号正确。
 
-刷新后明确选择页签，再连接并开启采集；多页不取第一个。同页分别右键标注并保存用途、允许动作与预期结果，点击“整理本页标注（ZCode）”生成合集。分组按规范化 origin/path 或 file URL/path，忽略 query/hash；业务键仍需保留。iframe、Shadow DOM、Canvas 内部对象不在当前采集范围。
+## 人的操作
 
-## 后台运行与权限
+刷新后明确选页，再连接并开启采集；多个同址页签不取第一个。同页分别右键保存控件名、用途、允许动作和预期结果，再点击“发给 ZCode”。“复制交接说明”提供读取本包的短任务，供人粘贴到已有会话；复制本身不提交模型。
 
-主路径由 `zcode_handoff.py` 调用 `zcode_appserver.py`，参考 Plaza 的 runtime、会话 SID 保留与事件订阅结构，独立封装在本仓库。安装版 ZCode.exe 以子进程 `ELECTRON_RUN_AS_NODE=1` 运行同包 app-server，后台不依赖桌面焦点。沿用已有认证与模型，不改全局默认、全局环境或其他 Plaza 角色，不打印密钥。
+合包按规范化 origin/path 或 file URL/path，忽略 query/hash，业务键仍需保留。只支持普通主 frame DOM；iframe、Shadow DOM、Canvas 内部对象不在范围。
 
-用户已明确授权本任务使用 yolo 完全访问，可按任务使用可用工具。任务范围仍是生成能力 draft，允许必要的格式/语法检查；不据权限扩大为连接网站、执行业务、运行候选 runner 或自动安装技能。未执行的校验如实说明。
+## 后台与首轮任务
 
-启动、刷新、标注不发模型任务。整理时先获得并保存真实 SID，再发送该任务并订阅事件；session/send ACK 是受理，必须等实际终态和同 SID 结果。`zcode_runner.py` 仍支持 CLI `-p` fallback，默认 mode=edit，可显式选 edit/plan/build/guarded/yolo；它不是主按钮通道。
+zcode_handoff.py 调用 zcode_appserver.py，独立采用 Plaza runtime、SID 保留与订阅结构。ELECTRON_RUN_AS_NODE=1 只作用于子进程；沿用已有认证与模型，后台不依赖桌面焦点，不改全局设置或其他 Plaza 角色。
 
-## 索引登记
+首轮只读 context.md、完整 page-bundle.json 的定位与用途，简短确认后等待用户继续。不自动生成能力文件、不规划后续、不连接网站或执行业务命令。yolo 是用户保留的执行模式，不是首轮扩展任务。范围写在技能与 context.md；短 prompt 只指向这项交接任务。旧 task.md、generation 字段和 generated/ 兼容保留，不读取旧 task.md，不把它们当本次任务。
 
-用户选择的私有索引适配不是官方公开 API。模型请求前 `preflight()` 只读核对 ProductVersion、四表 schema、唯一约束和项目归属。索引数据基目录依次取 `ZCODE_DATA_BASE_DIR`、`HOME`、系统用户目录，相对位置 `.zcode/v2/tasks-index.sqlite`。
+绑定后记录真实 SID，订阅事件并单次发送。协议 ACK 不等于模型已读或完成，需终态与同 SID 最终回复。恢复旧会话若用原生 session/setMode，可能保存当前选定工作区的权限偏好，last_binding.permissionScope 区分该作用范围。
 
-登记前只读核实真实 CLI 会话、目录、删除状态与权限。新写入前 SQLite backup 到采集工作区 `.handoffs/index-backups/`；事务插入新 task 及必要 local 项目/root，同 SID 正确映射时幂等回读。显式 `update_owned_mode=True` 只允许本工具 owned-marker 与同 SID/taskPath 匹配的旧行修改 mode，其他列与外来任务不动。未知 schema 停止，不迁移或删库；`indexRegistered` 不代表 GUI 可见。
+zcode_runner.py 的 CLI -p 留作源码 fallback，可选 mode、默认 edit，不是按钮主通道；fallback 测试不代替主通道验收。
 
-## 按阶段排错
+## 索引与排错
 
-- CDP：区分端点、无普通页、采集开关、错误页签与不支持的 frame。
-- app-server：区分启动、绑定 SID、task 受理、事件进度、实际终态；ACK 或进程存活不等于完成。结果未知保留原 SID，不重发。
-- 索引：任务完成而登记失败时，只检查版本/schema、备份、锁和归属并补登记，不重新调用模型。
-- GUI/续聊：到对应项目核对同一个 SID；不预设刷新必然吸纳，不用新会话冒充第二轮，避免同 SID 并发轮次。
+模型请求前 preflight 只读核对 ProductVersion、四表 schema/约束与项目归属。索引数据基目录依次取 ZCODE_DATA_BASE_DIR、HOME、系统用户目录，相对位置 .zcode/v2/tasks-index.sqlite。
 
-个人 profile、采集、会话、日志与索引备份留本地；诊断只取本次必要片段。独立技能包不含源码，不为阅读技能安装另一套运行环境。
+登记前只读核实原生主会话、目录、删除状态和 mode。写入前备份 .handoffs/index-backups/，事务插入新 task 及必要 local 项目/root；同 SID 正确映射时幂等回读。显式 update_owned_mode 只允许 ownership、同 SID/taskPath 匹配的本工具旧行只改 mode，其他列与外来任务不动，不迁移或删库。
+
+- CDP：核对端点、选定页签、开关与主 frame。
+- app-server：区分绑定 SID、受理 ACK、模型确认回复和实际终态。未知结果保留 SID，不重发。
+- 索引：模型已确认但登记失败时只补登记，不再调用模型。相同标注已有对话则复用，不重新交接。
+- GUI：到对应项目核对同 SID；不预设所有 build 热刷新，不用新会话冒充连续对话。
+
+个人资料、凭据、完整会话与索引备份留本地，诊断仅取必要片段。独立技能包不含源码，不为阅读技能安装另一套运行环境。

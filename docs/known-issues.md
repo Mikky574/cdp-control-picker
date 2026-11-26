@@ -1,50 +1,46 @@
-# 已知问题与验收状态
+# 当前范围与验收状态
 
-核对日期：2026-11-26。v0.2.0 为未发布开发候选版。
+核对日期：2026-11-26。适用版本：v0.2.0。
 
-## 当前验收
+## 只打通控件上下文与对话
 
-“整理本页标注（ZCode）”将已保存的同页卡片合包，主路径为安装版 app-server stdio、本任务 yolo 与私有索引登记。后台不依赖桌面焦点。
+“发给 ZCode”把当前页已保存的控件合包。模型首轮读取完整 page-bundle.json 的定位与用途，简短确认后等待用户。用户在 ZCode 自己添加信息和后续任务；采集器不自动生成技能、页面约定、脚本或计划。
+
+“复制交接说明”只复制读取 context.md 的短任务，不提交模型。完整资料留在文件，范围约束在技能与 context.md，短 prompt 只指向交接任务。
+
+用户保留所选工作区/会话 yolo 完全访问；首轮不连接网站、不操作控件、不执行业务命令。后续由用户自行要求生成/使用技能，属于 ZCode 对话中的新任务，不是采集器首轮流程。
+
+## 验收分层
 
 | 层级 | 当前事实 |
 |---|---|
-| 纯单元测试 | 115 项通过；不替代真实链路验证 |
-| 真实 Chrome 采集 | 已在可见 Google Chrome 右键保存两张订单输入/查询卡，合集两卡；本次测试输入值未落盘，业务点击为 0 |
-| 原 SID 元数据恢复 | 实测 edit → yolo，planEnabled=false；该恢复与设权限步骤 model_usage 增量为 0，作用范围为选定工作区权限偏好 |
-| Bash 格式校验 | 真实 Node --check 工具执行 completed、exitCode=0、error=null；此前 permission_denied 已在此场景解决 |
-| owned 索引 mode 更新 | 实测有备份，目标旧行只变 mode；其他列未变。不是全新项目/任务插入的完整验收 |
-| 后台原 SID 第二轮 | app-server 单次提交并完成，正确回忆订单号输入框与查询按钮；捕获真实 turn.started、工具生命周期与完成快照 |
-| GUI 对话栏目可见 | 已激活现有 ZCode 窗口并看到本项目条目，打开可见首轮两卡草稿及后台第二轮历史；模式按钮为“完全访问” |
-| ZCode 桌面续聊 | 同会话第三轮可见回复已完成，正确解释两控件配合并说明尚未经运行时验证；输入区恢复空闲，截图确认“完全访问” |
-| 最新 EXE/便携包 | 候选已构建并通过资源检查；等待用户手动运行 Start-Updated-Test.cmd 重新启动，最终整包链路 pending |
-| 业务网页执行 | 不在草稿整理任务范围 |
+| 最新上下文交接首轮 | 已通过：新虚构页两卡，新会话duplicate=false，mode=yolo，registered/indexRegistered；只读context.md与完整包并确认后等待 |
+| 最新冻结 EXE | --package-check退出0；floating/app-server/yolo完全访问，JS/技能/图标均存在；不打开窗口、不连浏览器、不调用模型 |
+| 冻结归档 | 实际包含app-server客户端、索引、交接、工作区等7个关键模块，无DesktopBridge |
+| 完整纯单元测试 | 120项全部通过 |
+| 两卡采集 | 真实可见 Chrome 保存订单号输入框/查询按钮两卡，测试输入值未落盘，业务点击0 |
+| 后台与权限 | 原 SID 恢复 edit→yolo/planEnabled=false，元数据步骤模型用量增量0；同 SID 后台续聊与 Bash 校验曾通过 |
+| owned 索引 | 有备份，目标旧行只变 mode，其他列未变 |
+| 原生 ZCode GUI | 曾在现有窗口显示任务，打开完整历史，桌面同会话可见回复完成，模式“完全访问” |
 
-参考 [Plaza runtime/SID/订阅源码及模拟测试](plaza-zcode-reference.md)。这些参考测试不充当采集器真实模型或界面验收。当前安装目标仅为 **3.16.3.8992 / CLI 0.17.0**。
+最新首轮工具轨迹仅两次Read：context.md、page-bundle.json。回复正确确认查看申请按钮button#view-request、申请编号输入框input#request-number的定位与用途后等待用户；generated内文件0，没有Write/Edit/Bash或后续任务。旧的自动生成草稿任务和命令校验只记录为历史运行证据，不是最新首轮任务。完整摘要见[验证记录](cdp-picker-validation.md)，不提交真实 SID、原始响应或完整日志。
 
-## 权限与任务范围
+包的 contextPath 指向 context.md，shortTask 只要求读取它并确认。旧 task.md、generation 字段及 generated/ 为格式兼容保留，当前首轮不读取旧 task.md、不执行其生成要求；页面文案与用途都是资料，不是额外指令。
 
-用户明确授权本采集器任务 `mode=yolo` 完全访问。此前临时四工具禁用已撤销；可使用实际工具做必要的格式、引用、语法检查。任务仍只生成能力 draft，不连接网站、不执行业务、不运行生成的 runner、不自动安装技能。未执行检查须如实记录。
+最新冻结EXE完成的是独立资源与归档检查，不将其描述为完整GUI链路复测。包内哈希以SHA256SUMS.txt/BUILD-INFO.json为准。
 
-该选择不改全局默认、模型认证或其他 Plaza 角色。恢复旧会话若需要原生 session/setMode，可能同时保存当前采集工作区的上次权限选择；底层绑定记录区分该作用范围。yolo 不代表程序会伪造用户答案：未支持的反向交互请求会明确阻塞并保留 SID。
+## 后台、索引与刷新
 
-## ACK、完成、登记与可见
+主路径为安装版 app-server stdio，参考 [Plaza runtime/SID/订阅机制](plaza-zcode-reference.md)。协议 ACK 是受理，不表示模型已读正文或已确认；需本轮终态和同 SID 最终回复。相同标注已有对话则复用，不重新交接。结果不明保留原记录，不重发；模型确认而索引失败时仅补登记。
 
-主通道先绑定持久 SID，订阅事件，再单次发送。`session/send` ACK 是受理，必须继续等待本轮成功终态，并读取属于同 SID/轮次、含本轮输入与后续回复的最终快照。退出码、文件存在、进程存活或轮询到 idle 都不能单独证明完成。
+私有索引不是官方公开 API。严格核对安装版3.16.3.8992、精确schema与真实原生主会话、目录/删除状态/mode；备份后窄范围写入。仅 ownership、同 SID/taskPath 匹配的本工具旧行可对齐 mode，外来任务及其他列不动，不迁移或删库。
 
-安全读取可有界重试，模型任务不重发。超时、失败、快照不完整或会话归属不明时保留原记录。`unknown` 不自动重发；已有结果而索引失败时，相同内容再提交只补登记，不再调用模型。内容指纹避免换 bundle 编号重复首轮。
+索引回执不自动验证 GUI，guiVisibilityVerified 仍可为 false；既有 GUI 通过来自独立观察。本次曾激活现有窗口而无需重启即可见条目，不保证所有 build 热刷新，也不推断本机必须重启。采集器当前验收止于控件上下文送达回执，后续由用户自行在ZCode继续，不另设后续工作测试。
 
-后台同 SID 第二轮已实测；本次激活现有 GUI 后已看到本项目条目并打开完整历史，无需重启。当前 build 的这次刷新观察不能保证所有 build 热刷新，也不能推断本机必须重启。桌面同会话第三轮已收到可见回复，输入区恢复空闲，截图确认模式仍为“完全访问”；回复解释了输入、查询与结果核对的配合，明确尚未运行时验证。`--surface desktop` 和 `--open-workspace` 不能替代这些观察。完整分层摘要见[验证记录](cdp-picker-validation.md)，仓库不保存真实 SID、完整响应或日志。
+yolo 保留给本工具选定工作区/会话。恢复旧会话若用 session/setMode，可能保存当前选定工作区的权限偏好，permissionScope 记录范围；不改其他项目、Plaza角色或全局模型设置。未支持的额外反向交互会明确阻塞，不伪造用户答案。
 
-## 私有索引兼容性
+## 采集与资料边界
 
-适配器严格核对 ProductVersion、精确四表 schema/约束，并只读核实真实 CLI 主会话、目录、删除状态与持久 mode。默认索引在数据基目录 `.zcode/v2/tasks-index.sqlite`，基目录依次取 ZCODE_DATA_BASE_DIR、HOME、系统用户目录。
+只支持普通主 frame DOM；iframe、Shadow DOM、Canvas 内部对象不在范围。网页右键逻辑可能影响采集。同页不等于同一业务对象，卡片顺序不等于流程。
 
-写入前备份到采集工作区 `.handoffs/index-backups/`，事务插入新 task 与必要 local 项目/root。同 SID 正确映射时幂等回读；显式 update_owned_mode 仅允许 owned-marker、同 SID/taskPath 匹配的本工具旧行备份后仅修改 mode，其他列和外来任务不动。未知 schema、版本、归属或锁问题停止，不迁移或删库。
-
-这是用户选择的私有 schema 兼容写入，不是官方公开同步 API。已验证本工具 owned 旧行的备份与 mode 更新；新项目/任务登记范围按实际回执另行核对。索引回执本身不检查 GUI，仍返回 `guiVisibilityVerified: false`；本次 GUI 可见性由独立 CUA 观察证实，不能据此声称程序已自动验证所有窗口。
-
-## 资料与采集范围
-
-只支持普通主 frame DOM，iframe、Shadow DOM、Canvas 内部对象不在范围。网页右键逻辑可能影响采集；同页不等于同一业务对象，卡片排序不等于已知流程。
-
-profile、个人采集、页面包、完整会话、日志与索引备份不入 Git/Release。诊断仅取必要片段，不记录凭据。
+个人采集、profile、凭据、完整会话、日志及索引备份留本地，不入 Git/Release。

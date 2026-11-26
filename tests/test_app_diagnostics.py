@@ -78,7 +78,7 @@ class AppDiagnosticsTests(unittest.TestCase):
                 picker = self.fake_app(failure)
                 picker._drain()
                 self.assertIn("复制失败", picker.status.value)
-                self.assertNotIn("任务已复制", picker.status.value)
+                self.assertNotIn("交接说明已复制", picker.status.value)
                 self.assertFalse(picker.exporting)
                 self.assertFalse(picker.sending)
                 self.assertTrue(picker.events.empty())
@@ -89,7 +89,7 @@ class AppDiagnosticsTests(unittest.TestCase):
         picker = self.fake_app()
         picker._drain()
         self.assertEqual(picker.root.clipboard, "Read the exported page task.")
-        self.assertIn("任务已复制", picker.status.value)
+        self.assertIn("交接说明已复制", picker.status.value)
         self.assertFalse(picker.exporting)
         self.assertEqual(len(picker.root.scheduled), 1)
 
@@ -130,7 +130,7 @@ class AppDiagnosticsTests(unittest.TestCase):
                 picker.events.put(("handoff-result", result))
                 picker.events.put(("page-export-finished", None))
                 picker._drain()
-                self.assertEqual("已登记到 ZCode" in picker.status.value, expected_success)
+                self.assertEqual("已交给 ZCode" in picker.status.value, expected_success)
                 self.assertNotIn("已进入 ZCode 对话", picker.status.value)
                 self.assertFalse(picker.sending)
                 self.assertEqual(len(picker.root.scheduled), 1)
@@ -162,7 +162,7 @@ class AppDiagnosticsTests(unittest.TestCase):
             picker.send_page_to_zcode()
         self.assertEqual(calls, [(workspace, r"C:\Installed\ZCode\ZCode.exe"), bundle])
         picker._drain()
-        self.assertIn("已登记到 ZCode", picker.status.value)
+        self.assertIn("已交给 ZCode", picker.status.value)
         self.assertFalse(picker.sending)
 
     @staticmethod
@@ -209,7 +209,7 @@ class AppDiagnosticsTests(unittest.TestCase):
         token = next(iter(picker._pending_saves))
         picker._finish_pending_save(token)
         app.PickerApp._controls(picker)
-        self.assertEqual(picker.send_button.options["text"], "整理本页标注（ZCode）")
+        self.assertEqual(picker.send_button.options["text"], "发给 ZCode")
         self.assertEqual(picker.send_button.options["state"], "normal")
 
     def test_save_worker_releases_pending_after_success_or_error(self):
@@ -320,7 +320,7 @@ class AppDiagnosticsTests(unittest.TestCase):
             payload = json.loads(bundles[0].read_text(encoding="utf-8"))
             self.assertEqual(payload["captureCount"], 2)
             self.assertEqual({item["captureId"] for item in payload["captures"]}, {"cap-original", "cap-latest"})
-            self.assertIn("任务已复制", picker.status.value)
+            self.assertIn("交接说明已复制", picker.status.value)
             self.assertIsNotNone(picker.root.clipboard)
 
     def test_saved_count_uses_current_page_identity(self):

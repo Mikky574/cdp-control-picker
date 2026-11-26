@@ -26,9 +26,12 @@ def reply(value,result=None,error=None):
  emit({'id':value['id'],**({'error':error} if error else {'result':result})})
 def snapshot():
  active=scenario=='inflight_final' and sent and read_after_terminal<2
- return {'session':{'sessionId':sid,'workspace':ws,'mode':mode},'settings':{'permission':{'mode':mode},'mode':{'current':'plan' if scenario=='mode_conflict' else mode}},
-         'projection':{'status':'running' if active else 'idle','currentTurnId':turn},
+ result={'session':{'sessionId':sid,'workspace':ws,'mode':'build' if scenario in ('cold_create','no_settings_build') else mode},'settings':{'permission':{'mode':'edit' if scenario=='permission_conflict' else mode},'mode':{'current':'plan' if scenario=='mode_conflict' else mode}},
+         'projection':{'mode':'build' if scenario=='cold_create' else mode,'status':'running' if active else 'idle','currentTurnId':turn},
          'runtime':{'activeTurnId':turn} if active else {},'messages':messages[:]}
+ if scenario in ('no_settings','no_settings_build'):result.pop('settings')
+ if scenario=='empty_settings':result['settings']={}
+ return result
 def notification(method,**params):emit({'method':method,'params':params})
 def event(event_type,input_id=None,turn_id=None,session=None,**payload):
  if input_id is not None:payload['inputId']=input_id
@@ -171,6 +174,31 @@ class AppServerTests(unittest.TestCase):
         self.assertFalse(client.request("probe", {})["planEnabled"])
         self.assertTrue(client.last_binding["planResetByNativeModeSelection"])
         conflict = self.client("mode_conflict")
+        with self.assertRaises(AppServerError):
+            conflict.bind()
+        self.assertNotIn("session/send", self.methods(conflict))
+
+    def test_cold_draft_uses_authoritative_permission_settings_not_session_category(self):
+        client = self.client("cold_create")
+        snapshot = client.bind()
+        self.assertEqual(snapshot["session"]["mode"], "build")
+        self.assertEqual(snapshot["projection"]["mode"], "build")
+        self.assertEqual(snapshot["settings"]["permission"]["mode"], "yolo")
+        self.assertEqual(snapshot["settings"]["mode"]["current"], "yolo")
+        self.assertEqual(client.last_binding["mode"], "yolo")
+        self.assertEqual(self.methods(client).count("session/setMode"), 1)
+        self.assertNotIn("session/send", self.methods(client))
+        for scenario in ("mode_conflict", "permission_conflict", "empty_settings"):
+            with self.subTest(scenario=scenario):
+                conflict = self.client(scenario)
+                with self.assertRaises(AppServerError):
+                    conflict.bind()
+                self.assertNotIn("session/send", self.methods(conflict))
+
+    def test_legacy_session_mode_fallback_requires_absent_settings_and_exact_mode(self):
+        client = self.client("no_settings")
+        self.assertNotIn("settings", client.bind())
+        conflict = self.client("no_settings_build")
         with self.assertRaises(AppServerError):
             conflict.bind()
         self.assertNotIn("session/send", self.methods(conflict))
